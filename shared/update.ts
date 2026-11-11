@@ -19,4 +19,15 @@ export interface DesktopBridge {
     /** Calls back on every change; returns the unsubscribe. */
     onChange(callback: (state: UpdateState) => void): () => void
   }
+  prefs: {
+    get(): Promise<DesktopPrefs>
+    /** Turns all of Hivescope's notifications on or off. */
+    setNotifications(on: boolean): Promise<void>
+    /** Calls back when they change, here or in the tray menu; returns the unsubscribe. */
+    onChange(callback: (prefs: DesktopPrefs) => void): () => void
+  }
+}
+
+export interface DesktopPrefs {
+  notifications: boolean
 }

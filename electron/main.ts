@@ -57,10 +57,18 @@ const updater = new Updater({
   },
   beforeQuit: () => (quitting = true),
 })
+
+/** Turns every Hivescope notification on or off, from the tray or the page; both show the change. */
+function setNotifications(on: boolean) {
+  prefs.notifications = on
+  savePrefs()
+  buildTrayMenu()
+  win?.webContents.send('prefs:changed', { notifications: on })
+}
 let notifiedVersion: string | undefined
 /** One notification per version when it's downloaded and ready. */
 function notifyReady(state: UpdateState) {
-  if (state.status !== 'ready' || notifiedVersion === state.next || !Notification.isSupported()) return
+  if (state.status !== 'ready' || notifiedVersion === state.next || !prefs.notifications || !Notification.isSupported()) return
   notifiedVersion = state.next
   const note = new Notification({ title: `Hivescope ${state.next} is ready`, body: 'Restart Hivescope to update. Click to open it.', icon: ICON })
   note.on('click', () => show())
@@ -187,13 +195,11 @@ function buildTrayMenu() {
       { type: 'separator' },
       ...(updater.enabled ? [updateItem, { type: 'separator' as const }] : []),
       {
-        label: 'Notify when subagents finish',
+        label: 'Notifications',
+        sublabel: 'Subagents finishing, sessions waiting for you, updates',
         type: 'checkbox',
         checked: prefs.notifications,
-        click: item => {
-          prefs.notifications = item.checked
-          savePrefs()
-        },
+        click: item => setNotifications(item.checked),
       },
       {
         // Only the installed app: from `npm run desktop` it would register the bare Electron runtime.
@@ -303,6 +309,8 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.handle('update:state', () => updater.state)
   ipcMain.handle('update:check', event => (fromOwnPage(event) ? updater.check(true) : undefined))
   ipcMain.handle('update:install', event => (fromOwnPage(event) ? updater.install() : undefined))
+  ipcMain.handle('prefs:get', () => ({ notifications: prefs.notifications }))
+  ipcMain.handle('prefs:notifications', (event, on: unknown) => (fromOwnPage(event) && typeof on === 'boolean' ? setNotifications(on) : undefined))
   app.on('before-quit', () => (quitting = true))
   // Stay in the tray when the window is closed.
   app.on('window-all-closed', () => {})

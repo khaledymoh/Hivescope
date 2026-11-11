@@ -9,6 +9,38 @@ declare global {
   }
 }
 
+/** The top bar's notifications switch, in the desktop app only. The tray menu has the same switch. */
+export function NotificationsButton() {
+  const bridge = window.hivescopeDesktop?.prefs
+  const [on, setOn] = useState<boolean>()
+
+  useEffect(() => {
+    if (!bridge) return
+    void bridge.get().then(p => setOn(p.notifications))
+    return bridge.onChange(p => setOn(p.notifications))
+  }, [bridge])
+
+  if (!bridge || on === undefined) return null
+  return (
+    <button
+      className={`top-btn icon-btn ${on ? '' : 'muted'}`}
+      onClick={() => {
+        setOn(!on)
+        void bridge.setNotifications(!on)
+      }}
+      aria-pressed={on}
+      aria-label={on ? 'Notifications on' : 'Notifications off'}
+      title={on ? 'Notifications on: subagents finishing, sessions waiting for you, updates. Click to turn them off.' : 'Notifications off. Click to turn them on.'}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+        {!on && <path d="M3 3l18 18" />}
+      </svg>
+    </button>
+  )
+}
+
 /**
  * The top bar's update button, in the desktop app only. It checks on its own, downloads a newer
  * version in the background and then offers "Restart to update", which installs it without a wizard.

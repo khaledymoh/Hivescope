@@ -65,6 +65,8 @@ export class Updater {
   start() {
     if (!this.enabled) return
     this.cleanOld()
+    // Right after an update, the installer that just ran may still hold its file: try again later.
+    setTimeout(() => this.cleanOld(), 2 * 60_000).unref()
     setTimeout(() => void this.check(false), FIRST_CHECK_MS)
     this.timer = setInterval(() => void this.check(false), CHECK_EVERY_MS)
     this.timer.unref()
@@ -88,6 +90,7 @@ export class Updater {
     if (!this.enabled || s.status === 'checking' || s.status === 'downloading' || s.status === 'installing') return
     if (s.status === 'ready' && !manual) return
     const version = app.getVersion()
+    this.cleanOld()
     this.set({ status: 'checking', version })
     try {
       const res = await net.fetch(this.url(`${this.platform}.json`), { cache: 'no-store' })
@@ -204,14 +207,23 @@ export class Updater {
     setTimeout(() => app.quit(), 300)
   }
 
-  /** Installers of versions that are installed now, or older. */
+  /** Removes downloaded installers, except one that's waiting to be installed. Files still in use are left for next time. */
   private cleanOld() {
+    let names: string[]
     try {
-      for (const name of readdirSync(this.dir)) {
-        if (/\.(exe|dmg|part)$/.test(name)) rmSync(path.join(this.dir, name), { force: true })
-      }
+      names = readdirSync(this.dir)
     } catch {
-      // No folder yet.
+      return // No folder yet.
+    }
+    for (const name of names) {
+      const file = path.join(this.dir, name)
+      if (!/\.(exe|dmg|part)$/.test(name) || file === this.downloaded?.file) continue
+      if (this.state.status === 'downloading' && name.endsWith('.part')) continue
+      try {
+        rmSync(file, { force: true })
+      } catch {
+        // Locked (an installer still closing): the next cleanup gets it.
+      }
     }
   }
 }

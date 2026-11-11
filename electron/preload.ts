@@ -4,7 +4,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { DesktopBridge, UpdateState } from '../shared/update.ts'
+import type { DesktopBridge, DesktopPrefs, UpdateState } from '../shared/update.ts'
 
 const bridge: DesktopBridge = {
   update: {
@@ -16,6 +16,17 @@ const bridge: DesktopBridge = {
       ipcRenderer.on('update:changed', listener)
       return () => {
         ipcRenderer.off('update:changed', listener)
+      }
+    },
+  },
+  prefs: {
+    get: () => ipcRenderer.invoke('prefs:get') as Promise<DesktopPrefs>,
+    setNotifications: on => ipcRenderer.invoke('prefs:notifications', on) as Promise<void>,
+    onChange: callback => {
+      const listener = (_: unknown, prefs: DesktopPrefs) => callback(prefs)
+      ipcRenderer.on('prefs:changed', listener)
+      return () => {
+        ipcRenderer.off('prefs:changed', listener)
       }
     },
   },

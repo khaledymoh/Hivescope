@@ -5,7 +5,7 @@ import { type Overview, type SessionDetail, useLive, useVersion } from './api'
 import { OverviewView } from './OverviewView'
 import { SessionView } from './SessionView'
 import { SpaceView } from './Space'
-import { UpdateButton } from './Update'
+import { NotificationsButton, UpdateButton } from './Update'
 import { GROUP_LABELS, type GroupBy, groupSessions, remember, remembered } from './groups'
 import { C, ago, dayOf, family, modelColor, shortModel, tokens } from './theme'
 
@@ -63,6 +63,7 @@ export function App() {
         <button className={`top-btn ${storage ? 'on' : ''}`} onClick={() => select(storage ? undefined : 'storage')} title="Free the disk space agents left behind">
           {measuring ? <span className="spinner" aria-label="Measuring" /> : '▣'} Free space
         </button>
+        <NotificationsButton />
         <UpdateButton />
         <span className={`conn ${connected ? 'on' : 'off'}`} title={connected ? 'Receiving live updates' : 'Not connected to the Hivescope server'}>
           {connected ? 'live' : 'offline'}

@@ -113,7 +113,8 @@ function png(size, template = false) {
 
 /** An .ico holding PNG images, which Windows Vista and later read. */
 function ico(sizes) {
-  const images = sizes.map(png)
+  // Not sizes.map(png): map's index argument would turn on png's `template` flag.
+  const images = sizes.map(size => png(size))
   const header = Buffer.alloc(6)
   header.writeUInt16LE(1, 2)
   header.writeUInt16LE(sizes.length, 4)

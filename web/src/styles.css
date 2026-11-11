@@ -1788,6 +1788,12 @@ h2 {
   border-color: color-mix(in srgb, var(--honey) 55%, transparent);
   background: color-mix(in srgb, var(--honey) 10%, transparent);
 }
+.top-btn.icon-btn {
+  padding: 5px 9px;
+}
+.top-btn.icon-btn.muted {
+  color: var(--faint);
+}
 .top-btn.update-error {
   color: var(--error);
   border-color: color-mix(in srgb, var(--error) 40%, transparent);
