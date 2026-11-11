@@ -11,8 +11,12 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import path from 'node:path'
 
 const platform = process.argv[2]
-if (platform !== 'windows' && platform !== 'mac') {
-  console.error('Usage: node scripts/manifest.mjs windows|mac')
+if (platform !== 'windows' && platform !== 'mac') fail('Usage: node scripts/manifest.mjs windows|mac')
+
+/** Stops with a message; on GitHub Actions it's also an annotation, readable on the run page without signing in. */
+function fail(message) {
+  console.error(message)
+  if (process.env.GITHUB_ACTIONS) console.log(`::error title=Update manifest::${message.replace(/%/g, '%25').replace(/\r?\n/g, '%0A')}`)
   process.exit(1)
 }
 
@@ -27,25 +31,16 @@ const wanted = platform === 'windows' ? ['x64'] : ['arm64', 'x64']
 const files = {}
 for (const name of installers) {
   const arch = /arm64/i.test(name) ? 'arm64' : 'x64'
-  if (files[arch]) {
-    console.error(`Two ${arch} installers in ${dir}: ${files[arch].file} and ${name}`)
-    process.exit(1)
-  }
+  if (files[arch]) fail(`Two ${arch} installers in ${dir}: ${files[arch].file} and ${name}`)
   const full = path.join(dir, name)
   files[arch] = { file: name, size: statSync(full).size, sha256: createHash('sha256').update(readFileSync(full)).digest('hex') }
 }
 
 const missing = wanted.filter(arch => !files[arch])
-if (missing.length) {
-  console.error(`No ${missing.join(' or ')} ${ext} for ${version} in ${dir}. It holds:\n  ${listing.join('\n  ') || '(nothing)'}`)
-  process.exit(1)
-}
+if (missing.length) fail(`No ${missing.join(' or ')} ${ext} for ${version} in ${dir}. It holds:\n  ${listing.join('\n  ') || '(nothing)'}`)
 // GitHub renames uploaded files that contain spaces, which would break the download link.
 for (const f of Object.values(files)) {
-  if (/\s/.test(f.file)) {
-    console.error(`"${f.file}" has a space in its name; GitHub would rename it. Fix artifactName in package.json.`)
-    process.exit(1)
-  }
+  if (/\s/.test(f.file)) fail(`"${f.file}" has a space in its name; GitHub would rename it. Fix artifactName in package.json.`)
 }
 
 const out = path.join(dir, `${platform}.json`)

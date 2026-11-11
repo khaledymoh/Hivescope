@@ -10,7 +10,7 @@
   "scripts": {
     "desktop": "vite build && node scripts/build-electron.mjs && electron .",
     "dist:win": "node scripts/make-icon.mjs && vite build && node scripts/build-electron.mjs && electron-builder --win nsis --publish never",
-    "dist:mac": "node scripts/make-icon.mjs && vite build && node scripts/build-electron.mjs && electron-builder --mac dmg --publish never",
+    "dist:mac": "node scripts/make-icon.mjs && vite build && node scripts/build-electron.mjs && electron-builder --mac --publish never",
     "manifest": "node scripts/manifest.mjs",
     "start": "vite build && node --import tsx server/index.ts",
     "serve": "node --import tsx server/index.ts",
