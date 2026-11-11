@@ -1,0 +1,99 @@
+# Builds the Windows installer and the macOS disk images, and publishes them.
+#
+# - Push a tag like v0.6.0 (it must match "version" in package.json): both
+#   installers are built and attached to a new GitHub release, with the
+#   windows.json / mac.json manifests installed copies update from.
+# - Run it by hand (Actions > Release > Run workflow): the same builds, kept
+#   as downloadable workflow artifacts, with no release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            dist: dist:win
+          - os: macos-latest
+            platform: mac
+            dist: dist:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22+: on Windows, npm's shell (cmd) doesn't expand the test globs; Node does.
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json version $version. Raise the version, commit, then tag v$version."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # GITHUB_REPOSITORY is baked into the app here, so it knows where to look for updates.
+      - run: npm run ${{ matrix.dist }}
+
+      - name: Check the app signatures
+        if: matrix.platform == 'mac'
+        run: |
+          for app in release/*/mac*/Hivescope.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+          done
+
+      - run: node scripts/manifest.mjs ${{ matrix.platform }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hivescope-${{ matrix.platform }}
+          path: |
+            release/*/*.exe
+            release/*/*.dmg
+            release/*/windows.json
+            release/*/mac.json
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find out -type f
+          # The artifacts keep their release/<version>/ folders; attach the files themselves.
+          gh release create "$GITHUB_REF_NAME" $(find out -type f) \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Hivescope ${GITHUB_REF_NAME#v}" \
+            --generate-notes

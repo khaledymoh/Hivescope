@@ -1,0 +1,12 @@
+node_modules/
+
+# Build output. Installers are built by GitHub Actions (.github/workflows/release.yml);
+# build them locally only with `npm run dist:win` / `npm run dist:mac`.
+dist/
+dist-electron/
+release/
+build/
+*.log
+
+.DS_Store
+.env

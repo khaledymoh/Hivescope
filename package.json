@@ -1,0 +1,90 @@
+{
+  "name": "hivescope",
+  "productName": "Hivescope",
+  "version": "0.5.0",
+  "description": "A local dashboard that watches every Claude Code session on this PC: sessions, subagents, advisor calls, models and tools.",
+  "author": "Hivescope",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "desktop": "vite build && node scripts/build-electron.mjs && electron .",
+    "dist:win": "node scripts/make-icon.mjs && vite build && node scripts/build-electron.mjs && electron-builder --win nsis --publish never",
+    "dist:mac": "node scripts/make-icon.mjs && vite build && node scripts/build-electron.mjs && electron-builder --mac dmg --publish never",
+    "manifest": "node scripts/manifest.mjs",
+    "start": "vite build && node --import tsx server/index.ts",
+    "serve": "node --import tsx server/index.ts",
+    "dev": "concurrently -k -n server,web -c magenta,cyan \"tsx watch server/index.ts\" \"vite\"",
+    "build": "vite build",
+    "icons": "node scripts/make-icon.mjs",
+    "test": "tsx --test server/*.test.ts web/src/*.test.ts electron/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.9.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.3",
+    "concurrently": "9.1.0",
+    "echarts": "5.5.1",
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8",
+    "esbuild": "0.24.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tsx": "4.19.2",
+    "typescript": "5.6.3",
+    "vite": "5.4.10"
+  },
+  "build": {
+    "appId": "com.hivescope.app",
+    "productName": "Hivescope",
+    "directories": {
+      "output": "release/${version}",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/main.cjs",
+      "dist-electron/preload.cjs",
+      "assets/**",
+      "package.json"
+    ],
+    "afterPack": "scripts/after-pack.cjs",
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Hivescope",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  },
+  "allowScripts": {
+    "electron@33.2.1": true,
+    "esbuild@0.24.0": true,
+    "esbuild@0.23.1": true,
+    "esbuild@0.21.5": true
+  }
+}
