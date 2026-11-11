@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { type OpenedCheck, type ShotRoots, deleteShots, listOpened, listShots, resolveShot, summarize } from './shots.ts'
+import { type OpenedCheck, type ShotRoots, type Trash, deleteShots, listOpened, listShots, resolveShot, summarize } from './shots.ts'
 import { type SessionInfo, freeSpace, spaceReport } from './space.ts'
 import { Store } from './store.ts'
 import type { LeftoverKind } from '../shared/types.ts'
@@ -51,6 +51,11 @@ export interface HivescopeOptions {
   dist: string
   /** Where Claude Code keeps per-session temporary files; defaults to <temp>/claude. */
   tempRoot?: string
+  /**
+   * Moves a file to the Recycle Bin / Trash. The desktop app passes Electron's; without it,
+   * images Claude opened from your own folders can't be removed from Hivescope.
+   */
+  trash?: Trash
   log?: (message: string) => void
 }
 
@@ -165,6 +170,8 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
       const own = (await listShots(shotRoots)).filter(f => f.sessionId === shotsOf[1])
       const session = store.sessions.get(shotsOf[1]!)
       const opened = session ? await listOpened(shotRoots, session.id, session.imagesOpened()) : []
+      // Tells the page whether images opened from your folders can go to the Recycle Bin from here.
+      res.setHeader('x-hivescope-trash', opts.trash ? '1' : '0')
       return json(res, [...own, ...opened])
     }
     const shot = url.pathname.match(/^\/api\/shot\/([\w-]+)$/)
@@ -182,13 +189,15 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
     if (url.pathname === '/api/shots/delete') {
       // A custom header no other site can send without a CORS preflight this server never grants.
       if (req.method !== 'POST' || req.headers['x-hivescope'] !== 'delete') return json(res, { error: 'refused' }, 403)
-      let body: { ids?: string[]; sessionId?: string; all?: boolean; includePasted?: boolean }
+      let body: { ids?: string[]; sessionId?: string; all?: boolean; includePasted?: boolean; includeOpened?: boolean }
       try {
         body = JSON.parse(await readBody(req))
       } catch {
         return json(res, { error: 'bad request' }, 400)
       }
       const allowPasted = body.includePasted === true
+      // Opened images only when asked for by name, and only to the Recycle Bin.
+      const allowOpened = body.includeOpened === true && opts.trash ? { check: wasOpened, trash: opts.trash } : undefined
       let ids = Array.isArray(body.ids) ? body.ids.filter(x => typeof x === 'string') : []
       if (body.sessionId || body.all) {
         const live = new Set([...sessionInfo()].filter(([, v]) => v.live).map(([k]) => k))
@@ -197,8 +206,8 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
           .filter(f => allowPasted || f.kind !== 'pasted')
           .map(f => f.id)
       }
-      const result = await deleteShots(shotRoots, ids, { pasted: allowPasted })
-      log(`Hivescope: deleted ${result.deleted} screenshots (${(result.bytes / 1e6).toFixed(1)} MB)`)
+      const result = await deleteShots(shotRoots, ids, { pasted: allowPasted, opened: allowOpened })
+      log(`Hivescope: deleted ${result.deleted} screenshots (${(result.bytes / 1e6).toFixed(1)} MB), ${result.trashed} of them to the Recycle Bin`)
       return json(res, result)
     }
 

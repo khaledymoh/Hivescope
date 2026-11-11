@@ -167,29 +167,42 @@ export function summarize(files: ShotFile[], titles: Map<string, { title: string
   return [...by.values()].sort((a, b) => b.bytes - a.bytes)
 }
 
-/** Deletes files by id after checking each one; skips anything that doesn't resolve. */
+/** Moves a file to the Recycle Bin (Windows) or Trash (macOS). Only the desktop app can. */
+export type Trash = (file: string) => Promise<void>
+
+/**
+ * Deletes files by id after checking each one; skips anything that doesn't resolve.
+ * Images a session opened from your own folders are never deleted outright: with `opened`, they go to
+ * the Recycle Bin, and only when that session's transcript shows it opening that exact image.
+ */
 export async function deleteShots(
   roots: ShotRoots,
   ids: string[],
-  allow: { pasted: boolean },
-): Promise<{ deleted: number; bytes: number; skipped: number }> {
+  allow: { pasted: boolean; opened?: { check: OpenedCheck; trash: Trash } },
+): Promise<{ deleted: number; bytes: number; skipped: number; trashed: number }> {
   let deleted = 0
   let bytes = 0
   let skipped = 0
+  let trashed = 0
   for (const id of new Set(ids)) {
-    const hit = resolveShot(roots, id)
+    const hit = resolveShot(roots, id, allow.opened?.check)
     if (!hit || (hit.kind === 'pasted' && !allow.pasted)) {
       skipped++
       continue
     }
     try {
       const st = await fs.stat(hit.file)
-      await fs.unlink(hit.file)
+      if (hit.kind === 'opened') {
+        await allow.opened!.trash(hit.file)
+        trashed++
+      } else {
+        await fs.unlink(hit.file)
+      }
       deleted++
       bytes += st.size
     } catch {
       skipped++
     }
   }
-  return { deleted, bytes, skipped }
+  return { deleted, bytes, skipped, trashed }
 }

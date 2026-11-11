@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { type FileStat, LEFTOVER_KINDS, type LeftoverKind, type SpaceReport, type SpaceSession } from '../../shared/types'
+import { confirmAction } from './Confirm'
 import { size } from './Shots'
 import { ago } from './theme'
 
@@ -109,7 +110,13 @@ export function SpaceView({ onOpen, onScanning }: { onOpen: (id: string) => void
   const names = kinds.map(k => KIND[k].label.toLowerCase()).join(', ')
 
   const run = async (body: { kinds: LeftoverKind[]; sessionId?: string }, stat: FileStat, where: string) => {
-    if (!confirm(`Delete ${stat.files} files (${size(stat.bytes)}): ${names}, ${where}?\n\nThis can't be undone.`)) return
+    const ok = await confirmAction({
+      title: `Delete ${stat.files} files?`,
+      details: [`${size(stat.bytes)} of ${names}, ${where}.`, 'Files a running session is still using are kept.'],
+      warning: 'They are deleted permanently, not moved to the Recycle Bin.',
+      action: `Delete ${stat.files} files`,
+    })
+    if (!ok) return
     setBusy(true)
     try {
       const r = await free(body)

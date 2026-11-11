@@ -324,6 +324,8 @@ if (!app.requestSingleInstanceLock()) {
         days: 7,
         root: path.join(os.homedir(), '.claude', 'projects'),
         dist: path.join(ROOT_DIR, 'dist'),
+        // Images Claude opened from your own folders go to the Recycle Bin, never deleted outright.
+        trash: (file: string) => shell.trashItem(file),
         log: (message: string) => console.log(message),
       }
       // A fixed port keeps the page's saved choices (grouping, collapsed groups) between

@@ -103,6 +103,16 @@ test('images opened elsewhere are served only for the session that opened them, 
     const r = await deleteShots(roots, [id], { pasted: true })
     assert.equal(r.deleted, 0)
     assert.equal(existsSync(shot), true)
+
+    // With the app's Recycle Bin, they go there (never unlinked), and only what the session opened.
+    const binned: string[] = []
+    const trash = async (f: string) => void binned.push(f)
+    const forged = forge(`opened:s1|${secret}`)
+    const r2 = await deleteShots(roots, [id, forged, forge(`opened:s2|${shot}`)], { pasted: false, opened: { check, trash } })
+    assert.deepEqual(binned, [shot])
+    assert.equal(r2.trashed, 1)
+    assert.equal(r2.skipped, 2)
+    assert.equal(existsSync(shot), true, 'moved by the trash function, not deleted by Hivescope')
   } finally {
     await rm(base, { recursive: true, force: true })
   }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import type { ShotFile, ShotKind } from '../../shared/types'
+import { confirmAction } from './Confirm'
 import { Panel } from './parts'
 import { hms } from './theme'
 
@@ -16,6 +17,8 @@ const KIND_HINT: Record<ShotKind, string> = {
   pasted: 'Images you pasted into the chat',
   opened: 'Saved outside Claude’s folders, such as in your project, and opened by Claude. Shown only: Hivescope never deletes them',
 }
+const OPENED_HINT_TRASH = 'Saved outside Claude’s folders, such as in your project, and opened by Claude. Removing them moves them to the Recycle Bin'
+const BIN = navigator.platform.startsWith('Mac') ? 'Trash' : 'Recycle Bin'
 
 export function size(bytes: number): string {
   if (bytes <= 0) return '0 KB'
@@ -24,34 +27,50 @@ export function size(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-async function remove(body: { ids?: string[]; sessionId?: string; all?: boolean; includePasted?: boolean }) {
+async function remove(body: { ids?: string[]; sessionId?: string; all?: boolean; includePasted?: boolean; includeOpened?: boolean }) {
   const res = await fetch('/api/shots/delete', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-hivescope': 'delete' },
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`Delete failed (${res.status})`)
-  return (await res.json()) as { deleted: number; bytes: number; skipped: number }
+  return (await res.json()) as { deleted: number; bytes: number; skipped: number; trashed: number }
 }
 
-function useJson<T>(url: string): [T | undefined, () => void] {
-  const [data, setData] = useState<T>()
+/** A session's images, and whether those opened from your folders can go to the Recycle Bin from here. */
+function useShots(sessionId: string): [{ files: ShotFile[]; canTrash: boolean } | undefined, () => void] {
+  const [data, setData] = useState<{ files: ShotFile[]; canTrash: boolean }>()
   const [n, setN] = useState(0)
   useEffect(() => {
     let off = false
-    fetch(url)
-      .then(r => (r.ok ? r.json() : undefined))
-      .then(d => !off && setData(d as T))
+    fetch(`/api/shots/${sessionId}`)
+      .then(async r => (r.ok ? { files: (await r.json()) as ShotFile[], canTrash: r.headers.get('x-hivescope-trash') === '1' } : undefined))
+      .then(d => !off && setData(d))
       .catch(() => {})
     return () => {
       off = true
     }
-  }, [url, n])
+  }, [sessionId, n])
   return [data, useCallback(() => setN(x => x + 1), [])]
 }
 
+
 /** A full-size view of one image, with delete and previous/next. */
-function Lightbox({ files, index, onIndex, onDelete, onClose }: { files: ShotFile[]; index: number; onIndex: (i: number) => void; onDelete: (f: ShotFile) => void; onClose: () => void }) {
+function Lightbox({
+  files,
+  index,
+  canTrash,
+  onIndex,
+  onDelete,
+  onClose,
+}: {
+  files: ShotFile[]
+  index: number
+  canTrash: boolean
+  onIndex: (i: number) => void
+  onDelete: (f: ShotFile) => void
+  onClose: () => void
+}) {
   const f = files[index]
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -77,9 +96,9 @@ function Lightbox({ files, index, onIndex, onDelete, onClose }: { files: ShotFil
         <button className="btn" disabled={index === files.length - 1} onClick={() => onIndex(index + 1)}>
           Next →
         </button>
-        {f.kind !== 'opened' && (
+        {(f.kind !== 'opened' || canTrash) && (
           <button className="btn danger" onClick={() => onDelete(f)}>
-            Delete
+            {f.kind === 'opened' ? `Move to ${BIN}` : 'Delete'}
           </button>
         )}
         <button className="btn" onClick={onClose}>
@@ -93,47 +112,91 @@ function Lightbox({ files, index, onIndex, onDelete, onClose }: { files: ShotFil
 
 /** One session's screenshots: thumbnails by kind, full view, delete one or all. */
 export function ShotGallery({ sessionId, live }: { sessionId: string; live: boolean }) {
-  const [files, reload] = useJson<ShotFile[]>(`/api/shots/${sessionId}`)
+  const [data, reload] = useShots(sessionId)
   const [open, setOpen] = useState<number>()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
 
-  if (!files) return <Panel title="Screenshots" wide><p className="empty">Looking for screenshots…</p></Panel>
+  if (!data) return <Panel title="Screenshots" wide><p className="empty">Looking for screenshots…</p></Panel>
+  const { files, canTrash } = data
   const agentFiles = files.filter(f => f.kind === 'tool' || f.kind === 'scratchpad')
+  const openedFiles = files.filter(f => f.kind === 'opened')
   const total = files.reduce((n, f) => n + f.bytes, 0)
   const agentBytes = agentFiles.reduce((n, f) => n + f.bytes, 0)
+  const liveWarning = live ? 'This session is live: an agent may still need an image it just saved.' : undefined
+  const removable = (f: ShotFile) => f.kind !== 'opened' || canTrash
 
-  const deleteOne = async (f: ShotFile) => {
-    if (!confirm(`Delete ${f.name} (${size(f.bytes)})? This can't be undone.`)) return
-    await remove({ ids: [f.id], includePasted: f.kind === 'pasted' })
-    setOpen(undefined)
-    reload()
+  const report = (r: { deleted: number; bytes: number; skipped: number; trashed: number }) => {
+    const parts = [r.trashed && `moved ${r.trashed} to the ${BIN}`, r.deleted - r.trashed && `deleted ${r.deleted - r.trashed}`].filter(Boolean)
+    setMessage(`${parts.join(', ').replace(/^./, c => c.toUpperCase())}: ${size(r.bytes)}${r.skipped ? `. ${r.skipped} skipped, in use or already gone.` : '.'}`)
   }
-  const deleteAll = async () => {
-    const warn = live ? '\n\nThis session is live: an agent may still need a screenshot it just saved.' : ''
-    if (!confirm(`Delete ${agentFiles.length} agent screenshots (${size(agentBytes)}) from this session? Images you pasted are kept. This can't be undone.${warn}`)) return
+  const act = async (body: Parameters<typeof remove>[0]) => {
     setBusy(true)
     try {
-      const r = await remove({ sessionId })
-      setMessage(`Deleted ${r.deleted} screenshots, freed ${size(r.bytes)}.`)
+      report(await remove(body))
     } catch (err) {
       setMessage(String(err))
     }
     setBusy(false)
+    setOpen(undefined)
     reload()
+  }
+
+  const deleteOne = async (f: ShotFile) => {
+    const toBin = f.kind === 'opened'
+    const ok = await confirmAction(
+      toBin
+        ? {
+            title: `Move ${f.name} to the ${BIN}?`,
+            details: [`${size(f.bytes)}, in ${f.path?.replace(/[\\/][^\\/]*$/, '') ?? 'your files'}.`, `It's your file, not Claude's: you can restore it from the ${BIN}.`],
+            action: `Move to ${BIN}`,
+          }
+        : {
+            title: `Delete ${f.name}?`,
+            details: [`${size(f.bytes)}, ${KIND_LABEL[f.kind].toLowerCase()}.`, ...(liveWarning ? [liveWarning] : [])],
+            warning: 'It is deleted permanently, not moved to the Recycle Bin.',
+            action: 'Delete',
+          },
+    )
+    if (ok) await act({ ids: [f.id], includePasted: f.kind === 'pasted', includeOpened: toBin })
+  }
+  const deleteAgent = async () => {
+    const ok = await confirmAction({
+      title: `Delete ${agentFiles.length} agent screenshots?`,
+      details: [`${size(agentBytes)} of tool screenshots and images agents saved in this session.`, 'Images you pasted and images in your own folders are kept.', ...(liveWarning ? [liveWarning] : [])],
+      warning: 'They are deleted permanently, not moved to the Recycle Bin.',
+      action: `Delete ${agentFiles.length} screenshots`,
+    })
+    if (ok) await act({ sessionId })
+  }
+  const trashOpened = async () => {
+    const bytes = openedFiles.reduce((n, f) => n + f.bytes, 0)
+    const folders = [...new Set(openedFiles.map(f => f.path?.replace(/[\\/][^\\/]*$/, '')).filter(Boolean))] as string[]
+    const ok = await confirmAction({
+      title: `Move ${openedFiles.length} images to the ${BIN}?`,
+      details: [
+        `${size(bytes)} of images in your own folders that this session opened:`,
+        ...folders.slice(0, 4),
+        ...(folders.length > 4 ? [`and ${folders.length - 4} more folders`] : []),
+        `These are your files, not Claude's. You can restore them from the ${BIN}.`,
+        ...(liveWarning ? [liveWarning] : []),
+      ],
+      action: `Move ${openedFiles.length} to ${BIN}`,
+    })
+    if (ok) await act({ ids: openedFiles.map(f => f.id), includeOpened: true })
   }
 
   return (
     <Panel title="Screenshots" note={files.length ? `${files.length} images · ${size(total)}` : 'none in this session'} wide>
       {files.length === 0 ? (
-        <p className="empty">No screenshots or images saved for this session.</p>
+        <p className="empty">{message || 'No screenshots or images saved for this session.'}</p>
       ) : (
         <>
           <div className="shots-actions">
             {message && <span className="dim">{message}</span>}
             <span className="grow" />
             {agentFiles.length > 0 && (
-              <button className="btn danger" disabled={busy} onClick={deleteAll}>
+              <button className="btn danger" disabled={busy} onClick={deleteAgent}>
                 Delete {agentFiles.length} agent screenshots · {size(agentBytes)}
               </button>
             )}
@@ -144,8 +207,18 @@ export function ShotGallery({ sessionId, live }: { sessionId: string; live: bool
             const folders = [...new Set(group.map(f => f.path?.replace(/[\\/][^\\/]*$/, '')).filter(Boolean))]
             return (
               <section key={kind} className="shots-group">
-                <h3>
-                  {KIND_LABEL[kind]} <span className="dim">· {group.length} · {size(group.reduce((n, f) => n + f.bytes, 0))} · {KIND_HINT[kind]}</span>
+                <h3 className="shots-group-h">
+                  <span>
+                    {KIND_LABEL[kind]}{' '}
+                    <span className="dim">
+                      · {group.length} · {size(group.reduce((n, f) => n + f.bytes, 0))} · {kind === 'opened' && canTrash ? OPENED_HINT_TRASH : KIND_HINT[kind]}
+                    </span>
+                  </span>
+                  {kind === 'opened' && canTrash && (
+                    <button className="btn danger small" disabled={busy} onClick={trashOpened}>
+                      Move {group.length} to {BIN}
+                    </button>
+                  )}
                 </h3>
                 {folders.length > 0 && (
                   <p className="shots-where mono" title="Where these files are">
@@ -162,8 +235,13 @@ export function ShotGallery({ sessionId, live }: { sessionId: string; live: bool
                       <div className="shot-meta">
                         <span className="shot-name">{f.name}</span>
                         <span className="dim">{size(f.bytes)}</span>
-                        {f.kind !== 'opened' && (
-                          <button className="shot-del" onClick={() => deleteOne(f)} aria-label={`Delete ${f.name}`} title="Delete">
+                        {removable(f) && (
+                          <button
+                            className="shot-del"
+                            onClick={() => deleteOne(f)}
+                            aria-label={f.kind === 'opened' ? `Move ${f.name} to the ${BIN}` : `Delete ${f.name}`}
+                            title={f.kind === 'opened' ? `Move to ${BIN}` : 'Delete'}
+                          >
                             ✕
                           </button>
                         )}
@@ -176,7 +254,7 @@ export function ShotGallery({ sessionId, live }: { sessionId: string; live: bool
           })}
         </>
       )}
-      {open !== undefined && <Lightbox files={files} index={open} onIndex={setOpen} onDelete={deleteOne} onClose={() => setOpen(undefined)} />}
+      {open !== undefined && <Lightbox files={files} index={open} canTrash={canTrash} onIndex={setOpen} onDelete={deleteOne} onClose={() => setOpen(undefined)} />}
     </Panel>
   )
 }
