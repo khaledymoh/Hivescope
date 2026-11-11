@@ -66,11 +66,11 @@ function setNotifications(on: boolean) {
   win?.webContents.send('prefs:changed', { notifications: on })
 }
 let notifiedVersion: string | undefined
-/** One notification per version when it's downloaded and ready. */
+/** One notification per version when a newer one is out. */
 function notifyReady(state: UpdateState) {
-  if (state.status !== 'ready' || notifiedVersion === state.next || !prefs.notifications || !Notification.isSupported()) return
+  if (state.status !== 'available' || notifiedVersion === state.next || !prefs.notifications || !Notification.isSupported()) return
   notifiedVersion = state.next
-  const note = new Notification({ title: `Hivescope ${state.next} is ready`, body: 'Restart Hivescope to update. Click to open it.', icon: ICON })
+  const note = new Notification({ title: `Hivescope ${state.next} is available`, body: 'Click Install in the top bar to update. Click here to open Hivescope.', icon: ICON })
   note.on('click', () => show())
   note.show()
 }
@@ -184,8 +184,8 @@ function buildTrayMenu() {
   const loginLabel = IS_MAC ? 'Open at login' : 'Start with Windows'
   const u = updater.state
   const updateItem: Electron.MenuItemConstructorOptions =
-    u.status === 'ready'
-      ? { label: `Restart to update to ${u.next}`, click: () => updater.install() }
+    u.status === 'available' || u.status === 'ready'
+      ? { label: `Install Hivescope ${u.next}`, click: () => void updater.install() }
       : u.status === 'downloading'
         ? { label: `Downloading Hivescope ${u.next}…`, enabled: false }
         : { label: u.status === 'checking' ? 'Checking for updates…' : 'Check for updates', enabled: u.status !== 'checking', click: () => void updater.check(true) }

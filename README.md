@@ -68,14 +68,14 @@ You only do this on the first install. Updates install without any warning.
 
 ## Updates
 
-The desktop app checks for a new version a few seconds after it starts, and then every 6 hours. When there is one:
+The desktop app checks for a new version a few seconds after it starts, and then every 6 hours. Nothing downloads until you say so. When there is one:
 
-1. It downloads in the background, and the top bar shows **Updating …%**.
-2. The download is checked against the release's checksum.
-3. The top bar shows **⬆ Restart to update**. The tray menu has the same option, and you get a notification.
-4. Click it. Hivescope closes, installs the new version silently and opens again.
+1. The top bar shows **⬆ Install 0.6.5** (with the new version). The tray menu has the same option, and you get a notification.
+2. Click it. The update downloads, and the top bar shows **Updating …%**.
+3. The download is checked against the release's checksum.
+4. Hivescope closes, installs the new version silently and opens again.
 
-To check yourself, click the version button in the top bar (**↻ v0.5.0**) or choose **Check for updates** in the tray menu.
+To check yourself, click the version button in the top bar (**↻ v0.6.4**) or choose **Check for updates** in the tray menu. The bell next to it turns Hivescope's notifications on or off.
 
 Updates come from this repository's latest GitHub release, so the repository must be public.
 

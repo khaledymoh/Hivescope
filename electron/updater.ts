@@ -1,10 +1,10 @@
 /**
  * Updates the installed app from the repo's latest GitHub release (see update-core.ts for the layout).
  *
- * Checks a little after start and every few hours. A newer version downloads in the background and
- * is checked against the manifest's sha256; then the toolbar offers "Restart to update". Installing
- * quits Hivescope and installs the new version without any wizard, then opens it again: on Windows the
- * installer does it in silent mode; on macOS a small script that outlives the app swaps the .app.
+ * Checks a little after start and every few hours, and only says when there's a newer version: the
+ * toolbar offers "Install <version>". Clicking it downloads the installer, checks it against the
+ * manifest's sha256, quits Hivescope and installs the new version without any wizard, then opens it
+ * again: on Windows the installer does it in silent mode; on macOS a small script swaps the .app.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -47,6 +47,8 @@ export class Updater {
   private readonly base = process.env.HIVESCOPE_UPDATE_URL?.replace(/\/?$/, '/')
   private readonly repo = BUILT_REPO.trim()
   private downloaded?: { version: string; file: string }
+  /** A newer release found by the last check, not downloaded yet. */
+  private available?: { version: string; entry: ManifestFile }
   private timer?: NodeJS.Timeout
   private lastEmit = 0
 
@@ -84,11 +86,21 @@ export class Updater {
     return this.base ? new URL(encodeURIComponent(file), this.base).toString() : releaseUrl(this.repo, file)
   }
 
-  /** Looks for a newer release and downloads it. `manual` checks show their errors; background ones stay quiet. */
+  /** What the toolbar shows when nothing is going on: a known update, a downloaded one, or nothing. */
+  private resting(version: string, checkedAt?: number): UpdateState {
+    if (this.downloaded) return { status: 'ready', version, next: this.downloaded.version }
+    if (this.available) return { status: 'available', version, next: this.available.version, size: this.available.entry.size }
+    return { status: 'idle', version, checkedAt }
+  }
+
+  /**
+   * Looks for a newer release. It only says so: nothing downloads until Install is clicked.
+   * `manual` checks show their errors; background ones stay quiet.
+   */
   async check(manual: boolean): Promise<void> {
     const s = this.state
     if (!this.enabled || s.status === 'checking' || s.status === 'downloading' || s.status === 'installing') return
-    if (s.status === 'ready' && !manual) return
+    if ((s.status === 'ready' || s.status === 'available') && !manual) return
     const version = app.getVersion()
     this.cleanOld()
     this.set({ status: 'checking', version })
@@ -98,18 +110,35 @@ export class Updater {
       if (!res.ok) throw new Error(`GitHub answered ${res.status}`)
       const manifest = parseManifest(await res.json())
       if (compareVersions(manifest.version, version) <= 0) {
-        this.set({ status: 'idle', version, checkedAt: Date.now() })
+        this.available = undefined
+        this.set(this.resting(version, Date.now()))
         return
       }
       const file = pickFile(manifest, process.arch)
       if (!file) throw new Error(`Hivescope ${manifest.version} has no installer for ${process.arch}`)
-      await this.download(manifest.version, file)
+      // A newer release than one downloaded earlier replaces it.
+      if (this.downloaded && this.downloaded.version !== manifest.version) this.downloaded = undefined
+      this.available = { version: manifest.version, entry: file }
+      this.set(this.resting(version))
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err)
-      console.warn(`Update check failed: ${raw}`)
-      const message = raw.startsWith('net::') ? `Can't reach GitHub (${raw.slice(5)})` : raw
-      if (manual) this.set({ status: 'error', version, message })
-      else this.set(this.downloaded ? { status: 'ready', version, next: this.downloaded.version } : { status: 'idle', version })
+      const message = friendly(err)
+      console.warn(`Update check failed: ${message}`)
+      this.set(manual ? { status: 'error', version, message } : this.resting(version))
+    }
+  }
+
+  /** Downloads the available update if it isn't yet, checks it, then quits and installs it. */
+  async install(): Promise<void> {
+    const version = app.getVersion()
+    try {
+      if (this.state.status === 'available' && this.available) await this.download(this.available.version, this.available.entry)
+      if (this.state.status !== 'ready' || !this.downloaded) return
+      if (process.platform === 'win32') this.installWindows(this.downloaded.file)
+      else this.installMac(this.downloaded.file)
+    } catch (err) {
+      const message = friendly(err)
+      console.warn(`Update failed: ${message}`)
+      this.set({ status: 'error', version, message })
     }
   }
 
@@ -155,19 +184,6 @@ export class Updater {
     renameSync(partial, target)
     this.downloaded = { version: next, file: target }
     this.set({ status: 'ready', version, next })
-  }
-
-  /** Quits and installs the downloaded version; it opens again when done. */
-  install() {
-    const d = this.downloaded
-    if (!d || this.state.status !== 'ready') return
-    const version = app.getVersion()
-    try {
-      if (process.platform === 'win32') this.installWindows(d.file)
-      else this.installMac(d.file)
-    } catch (err) {
-      this.set({ status: 'error', version, message: err instanceof Error ? err.message : String(err) })
-    }
   }
 
   private installWindows(installer: string) {
@@ -226,6 +242,12 @@ export class Updater {
       }
     }
   }
+}
+
+/** A short reason something failed; network errors say GitHub couldn't be reached. */
+function friendly(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.startsWith('net::') ? `Can't reach GitHub (${raw.slice(5)})` : raw
 }
 
 function sha256(data: Buffer): string {

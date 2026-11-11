@@ -43,7 +43,7 @@ export function NotificationsButton() {
 
 /**
  * The top bar's update button, in the desktop app only. It checks on its own, downloads a newer
- * version in the background and then offers "Restart to update", which installs it without a wizard.
+ * version and offers "Install <version>": only then does it download, install without a wizard and restart.
  */
 export function UpdateButton() {
   const bridge = window.hivescopeDesktop?.update
@@ -95,10 +95,20 @@ export function UpdateButton() {
         </button>
       )
     }
+    case 'available':
+      return (
+        <button
+          className="top-btn update-ready"
+          onClick={() => void bridge.install()}
+          title={`Hivescope ${state.next} is out (you have ${state.version}). Install downloads it (${Math.round(state.size / 1e6)} MB), then restarts Hivescope on the new version.`}
+        >
+          ⬆ Install {state.next}
+        </button>
+      )
     case 'ready':
       return (
-        <button className="top-btn update-ready" onClick={() => void bridge.install()} title={`Hivescope ${state.next} is downloaded. Restarting installs it and opens it again.`}>
-          ⬆ Restart to update {state.next}
+        <button className="top-btn update-ready" onClick={() => void bridge.install()} title={`Hivescope ${state.next} is downloaded. Install restarts Hivescope on the new version.`}>
+          ⬆ Install {state.next}
         </button>
       )
     case 'installing':

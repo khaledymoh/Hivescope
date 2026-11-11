@@ -4,6 +4,8 @@ export type UpdateState =
   | { status: 'disabled'; version: string; reason: string }
   | { status: 'idle'; version: string; checkedAt?: number }
   | { status: 'checking'; version: string }
+  /** A newer release exists; nothing is downloaded until Install is clicked. */
+  | { status: 'available'; version: string; next: string; size: number }
   | { status: 'downloading'; version: string; next: string; received: number; total: number }
   /** Downloaded and verified: restarting installs it. */
   | { status: 'ready'; version: string; next: string }
