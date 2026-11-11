@@ -79,6 +79,126 @@ To check yourself, click the version button in the top bar (**↻ v0.6.4**) or c
 
 Updates come from this repository's latest GitHub release, so the repository must be public.
 
+## Example: a model-routing setup
+
+Hivescope is most useful when Claude Code hands routine work to cheaper models and saves the strongest one for judgment. Here is a setup that does that, with a lead model, an advisor and three subagents. Hivescope then shows each subagent as its own lane, every advisor consultation, and in **Routing check**, whether the cheaper models really do their share.
+
+| Role | Model | Job |
+|---|---|---|
+| Main session | Sonnet | Does the work, and keeps design, debugging and judgment calls |
+| Advisor | Opus | Reviews the plan before starting, after repeated errors, and before finishing |
+| `quick` | Haiku | One lookup: a file, a fact, a page |
+| `callsites` | Haiku | Every usage of a symbol, as `path:line` only |
+| `worker` | Sonnet | Routine multi-step work: broad searches, research, mechanical edits, test runs |
+
+It takes five files in your user folder, so it applies to every project:
+
+```
+~/.claude/
+  settings.json        lead model and advisor
+  CLAUDE.md            when to delegate, and when to ask the advisor
+  agents/
+    quick.md
+    callsites.md
+    worker.md
+```
+
+### `~/.claude/settings.json`
+
+Add these two keys to the settings you already have:
+
+```json
+{
+  "model": "sonnet",
+  "advisorModel": "opus"
+}
+```
+
+### `~/.claude/CLAUDE.md`
+
+```markdown
+# Global instructions
+
+## Model routing
+Hand routine work to cheaper models. You have standing permission to delegate these without asking first:
+
+- **One-off lookups** (find a file, check one fact, summarize one doc or page) → `quick` agent (Haiku).
+- **Routine multi-step work** (broad codebase searches, web research across several sources,
+  summarizing many files, mechanical edits with clear instructions, running tests and reporting) → `worker` agent (Sonnet).
+- **Keep in the main session**: architecture and design, debugging, anything that needs judgment,
+  and anything that depends on what we've already discussed.
+
+Don't delegate tiny tasks that a single direct tool call would answer: the agent's startup costs more than it saves.
+
+## Agents
+- `quick` (Haiku): single lookups - one file, one fact, one page.
+- `callsites` (Haiku): find every usage of a function, class, or resource; returns file:line only.
+- `worker` (Sonnet): self-contained routine work, builds and test runs.
+- Keep design decisions in the main session.
+
+## Advisor
+The main session runs on Sonnet with Opus as the advisor (`advisorModel: opus`). Call the advisor:
+- before committing to a plan or approach,
+- when the same error happens twice,
+- before declaring a task done.
+```
+
+### `~/.claude/agents/quick.md`
+
+```markdown
+---
+name: quick
+description: Cheapest helper (Haiku) for small, single-step jobs - find a file, look up one fact, read one doc or page and summarize it, check one value. Use when the answer needs no judgment and no context from the conversation.
+model: haiku
+tools: Read, Grep, Glob, WebSearch, WebFetch
+---
+
+You are a fast lookup helper. Do exactly the one thing you were asked.
+
+- Don't edit files.
+- Answer in a few lines: the result, where it came from (file path or URL), and anything you're unsure of.
+- If the task turns out to need more than a simple lookup, say so instead of guessing.
+```
+
+### `~/.claude/agents/callsites.md`
+
+```markdown
+---
+name: callsites
+description: Cheap usage finder (Haiku) - finds every usage of a given function, class, method, or resource (string, config key, asset) and returns a list of file:line locations. Use when you need to know where something is referenced before changing it.
+model: haiku
+tools: Read, Grep, Glob
+---
+
+You find usages. Nothing else.
+
+- Search for every reference to the symbol or resource you were given: calls, imports, subclasses, overrides,
+  references from config or markup files, and string-based lookups. Try the obvious name variants.
+- Don't edit files.
+- Return only a list of `path:line` entries, grouped by file, with no file contents or code snippets.
+- End with the total count and any places you couldn't search or matches you're unsure are the same symbol.
+```
+
+### `~/.claude/agents/worker.md`
+
+```markdown
+---
+name: worker
+description: Mid-cost helper (Sonnet) for routine multi-step work - broad codebase searches, web research across several sources, summarizing many files, mechanical edits with clear instructions, running tests or builds and reporting results. Use when the task is self-contained and doesn't need deep reasoning or design decisions.
+model: sonnet
+tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch
+---
+
+You are a focused helper handling routine work so the main session can stay on the hard parts.
+
+- Do the task as described; don't expand its scope or redesign anything.
+- Only edit files when the task explicitly asks for edits.
+- Report back concisely: what you did, what you found (with file paths or source URLs and dates), and anything uncertain or left undone.
+- If you hit something that needs a real judgment call, stop and report it rather than deciding yourself.
+```
+
+**Per-project agents.** An agent in a project's own `.claude/agents/` folder only exists in that project. One example is an `audit` agent that runs the project's lint and tests before you finish. Mention it in `CLAUDE.md` as "if the project has it", so the global rules still work everywhere else.
+
 ## Run it in your browser
 
 You need Node.js 20 or newer.
