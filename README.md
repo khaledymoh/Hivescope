@@ -9,10 +9,14 @@ It reads the transcripts Claude Code already writes to `~/.claude/projects`, so 
 ## Features
 
 **Overview**
-- **Top bar:** sessions waiting for you, live sessions, subagents running, advisor calls this week and output tokens today.
+- **Top bar:** sessions waiting for you, live sessions, subagents running, advisor calls this week, output tokens today and today's cost.
+- **Needs attention:** a session whose context is nearly full, the same tool error twice in a row, a subagent with no activity for 10 minutes, and budgets nearly reached.
+- **Usage:** the current 5-hour window, today and this week, in dollars at API prices, with a chart of every 5-hour window this week. Set a budget for any of them and Hivescope tells you at 80% and 100%. See [The 5-hour window](#the-5-hour-window).
 - **Active now:** every session that did something in the last 30 minutes, with what it's doing right now.
 - **Model mix:** output tokens per day by model.
 - **Routing check:** the share of work each model did, so you can see whether your routing to cheaper models actually happens.
+- **Cost per day** by model, and **cost by project**.
+- **Missed delegations:** sessions where the lead did work your routing rules hand to a cheaper subagent: five or more reads and searches in a row with nothing edited, or two or more builds and test runs in one turn. Reads of files it then edits don't count, and nothing is flagged when the lead is already as cheap as the agent.
 - **When you work:** a weekday-by-hour heatmap of tool calls.
 - **Advisor consultations:** every advisor call, with what Claude wrote just before asking.
 - **Live log:** every session's actions as they happen, newest first.
@@ -25,15 +29,15 @@ It reads the transcripts Claude Code already writes to `~/.claude/projects`, so 
 
 ![A session in Hivescope: the lead model, its advisor and the subagents it delegated to](docs/session.png)
 
-- Its numbers: lead and advisor models, context size, prompts, tool calls, subagents, errors and output tokens.
+- Its numbers: lead and advisor models, context size, prompts, tool calls, subagents, errors, output tokens and cost, with what the advisor's calls cost.
 - **Hive flow:** the lead, its advisor and every subagent it delegated to, with what each one is doing now.
-- A timeline with the main session and each subagent in its own lane, the subagents table, top tools, tokens by model and the session log.
+- A timeline with the main session and each subagent in its own lane, the subagents table, top tools, tokens and cost by model, its possible missed delegations and the session log.
 
 **Free space:** finds the disk space agents left behind and frees it.
 
 **Desktop app**
 - Keeps watching from the tray (Windows) or menu bar (macOS) when you close the window.
-- **Notifications** when a subagent finishes or a session is waiting for you. Clicking one opens that session.
+- **Notifications** when a subagent finishes, a session is waiting for you, or something needs attention. Clicking one opens that session.
 - **Start with Windows / Open at login:** starts hidden in the tray.
 - **Automatic updates:** installs new versions by itself, with no installer to click through (see [Updates](#updates)).
 
@@ -70,18 +74,22 @@ You only do this on the first install. Updates install without any warning.
 
 The desktop app checks for a new version a few seconds after it starts, and then every 6 hours. Nothing downloads until you say so. When there is one:
 
-1. The top bar shows **⬆ Install 0.6.5** (with the new version). The tray menu has the same option, and you get a notification.
+1. The top bar shows **⬆ Install 0.6.6** (with the new version). The tray menu has the same option, and you get a notification.
 2. Click it. The update downloads, and the top bar shows **Updating …%**.
 3. The download is checked against the release's checksum.
 4. Hivescope closes, installs the new version silently and opens again.
 
-To check yourself, click the version button in the top bar (**↻ v0.6.4**) or choose **Check for updates** in the tray menu. The bell next to it turns Hivescope's notifications on or off.
+To check yourself, click the version button in the top bar (**↻ v0.6.5**) or choose **Check for updates** in the tray menu. The bell next to it turns Hivescope's notifications on or off.
 
 Updates come from this repository's latest GitHub release, so the repository must be public.
 
+## The 5-hour window
+
+Hivescope estimates the 5-hour window from your activity: a window starts with your first message after the last one ended, and lasts five hours. For your plan's real percentages, type `/usage` in Claude Code.
+
 ## Example: a model-routing setup
 
-Hivescope is most useful when Claude Code hands routine work to cheaper models and saves the strongest one for judgment. Here is a setup that does that, with a lead model, an advisor and three subagents. Hivescope then shows each subagent as its own lane, every advisor consultation, and in **Routing check**, whether the cheaper models really do their share.
+Hivescope is most useful when Claude Code hands routine work to cheaper models and saves the strongest one for judgment. Here is a setup that does that, with a lead model, an advisor and three subagents. Hivescope then shows each subagent as its own lane, every advisor consultation, in **Routing check** whether the cheaper models really do their share, and in **Missed delegations** where they didn't.
 
 | Role | Model | Job |
 |---|---|---|
@@ -255,6 +263,8 @@ To build an installer locally anyway, use `npm run dist:win` on Windows or `npm 
 - **The advisor's replies can't be shown.** Claude Code stores them encrypted. Hivescope shows what Claude wrote just before asking, or its last action if it wrote nothing.
 - **The transcript format is internal to Claude Code** and isn't documented, so a Claude Code update could break parts of Hivescope. Everything that depends on the format is in `server/reader.ts`.
 - **Your chats stay on your computer.** The server listens on 127.0.0.1 only and refuses requests addressed to any other host. The desktop app runs the same server inside itself. Don't change it to listen on your network: it exposes the content of every chat.
+- **Hivescope never changes Claude Code's settings.** Budgets are saved in its own file, `~/.claude/hivescope/settings.json`.
 - **The only thing that goes online is the update check.** The desktop app downloads the release manifest and installers from GitHub. Nothing about your sessions is sent.
-- **Token totals count what was processed.** When Claude consults the advisor mid-response, the context is processed twice and both passes are counted. "Context now" shows a single pass.
+- **Costs are API-equivalent.** They're what the tokens would cost at Anthropic's API prices (`shared/pricing.ts`), including cache reads and writes, fast mode and the advisor's own calls. On a subscription you pay a flat price instead, so use them to compare models, sessions and days. For a session that ran in one go they match the cost Claude Code records itself. They only count Claude Code on this computer.
+- **Token totals count what was processed.** When Claude consults the advisor mid-response, the lead's passes and the advisor's own call are all counted, each under its model. "Context now" shows a single pass.
 - **A subagent counts as running** until its transcript is marked finished, or it has had no activity for 30 minutes.

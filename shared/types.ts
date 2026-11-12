@@ -46,6 +46,74 @@ export interface TokenBucket {
   cacheRead: number
   cacheWrite: number
   output: number
+  /** API-equivalent cost in dollars (see shared/pricing.ts). */
+  cost: number
+}
+
+/**
+ * A stretch of the lead's work that the routing rules hand to a cheaper agent:
+ * lookups: a run of reads and searches with nothing edited · builds: builds or test runs.
+ * "Possible" only: Hivescope can't see why the lead did it itself.
+ */
+export interface MissedDelegation {
+  at: number
+  endAt: number
+  kind: 'lookups' | 'builds'
+  /** Tool calls in the stretch, and the responses that made them (parallel calls share one). */
+  calls: number
+  steps: number
+  /** A few of them, for the reader. */
+  examples: string[]
+  /** The agent the rules suggest, and the model it runs on. */
+  suggest: 'quick' | 'worker'
+  suggestModel: string
+  leadModel: string
+  /** What the lead's responses in the stretch cost, and the same tokens at the suggested model's prices. */
+  cost: number
+  cheapCost: number
+}
+
+/** Something worth a look: shown on the overview, and as a notification in the desktop app. */
+export interface Alert {
+  /** Stable, so each one is notified once. */
+  id: string
+  kind: 'context' | 'error' | 'stalled' | 'budget'
+  sessionId?: string
+  title: string
+  text: string
+  at: number
+}
+
+/** API-equivalent spend over one stretch of time. */
+export interface Spend {
+  start: number
+  end: number
+  cost: number
+  output: number
+  /** Cost per model. */
+  byModel: Record<string, number>
+}
+
+export interface Budgets {
+  /** Dollars, API-equivalent; unset means no limit. */
+  fiveHour?: number
+  day?: number
+  week?: number
+}
+
+export interface Settings {
+  budgets: Budgets
+}
+
+export interface Usage {
+  /** The current 5-hour window, estimated from activity. */
+  fiveHour?: Spend
+  today: Spend
+  /** The last 7 days. */
+  week: Spend
+  /** Every 5-hour window in the last 7 days, oldest first. */
+  blocks: Spend[]
+  budgets: Budgets
 }
 
 export type SessionStatus = 'live' | 'recent' | 'idle'
@@ -88,6 +156,13 @@ export interface SessionSummary {
   /** Tokens the last main response read as context (input + cache). */
   contextTokens: number
   outputTokens: number
+  /** API-equivalent cost of the session, its subagents and its advisor calls. */
+  cost: number
+  /** The part of it the advisor's own calls cost. */
+  advisorCost: number
+  /** Possible missed delegations, and what the lead spent on them. */
+  missed: number
+  missedCost: number
   lastAction: string
   /** Messages it sent to or received from other Claude sessions. */
   talks: number
@@ -242,6 +317,7 @@ export interface SessionDetail extends SessionSummary {
   /** Its exchanges with other Claude sessions, oldest first. */
   links: SessionLink[]
   log: LogEvent[]
+  missedRuns: MissedDelegation[]
 }
 
 export interface DailyModelTokens {
@@ -249,6 +325,7 @@ export interface DailyModelTokens {
   model: string
   output: number
   total: number
+  cost: number
 }
 
 export interface Overview {
@@ -268,4 +345,8 @@ export interface Overview {
   /** The newest 40 messages between sessions, newest first; each names its sender session. */
   messages: (SessionLink & { sessionId: string })[]
   scan: { files: number; bytes: number; ms: number }
+  /** API-equivalent cost per project in the window, highest first. */
+  projects: { name: string; cost: number; sessions: number }[]
+  usage: Usage
+  alerts: Alert[]
 }

@@ -44,6 +44,20 @@ export function tokens(n: number): string {
   return String(Math.round(n))
 }
 
+/** Dollars, API-equivalent: cents below $100, whole dollars above. */
+export function usd(n: number): string {
+  if (n > 0 && n < 0.01) return '<$0.01'
+  if (n < 100) return `$${n.toFixed(2)}`
+  return `$${Math.round(n).toLocaleString('en-US')}`
+}
+
+/** "21:00", or "Tue 21:00" when it isn't today. */
+export function when(at: number, now = Date.now()): string {
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  return d.toDateString() === new Date(now).toDateString() ? time : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`
+}
+
 export function hms(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }

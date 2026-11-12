@@ -5,6 +5,7 @@ import { Chart, axis, tooltip } from './Chart'
 import { AdvisorFeed, LiveLog, Panel } from './parts'
 import { TalkOverview } from './Talk'
 import { WaitingBox } from './HiveFlow'
+import { AlertsPanel, CostPerDay, MissedPanel, ProjectsPanel, UsagePanel } from './Usage'
 import { C, type Family, WEEKDAYS, family, tokens } from './theme'
 
 const FAMILIES: Family[] = ['opus', 'sonnet', 'haiku', 'other']
@@ -110,6 +111,8 @@ export function OverviewView({ overview, onOpen }: { overview: Overview; onOpen:
           </div>
         </Panel>
       )}
+      <AlertsPanel alerts={overview.alerts} onOpen={onOpen} />
+      <UsagePanel usage={overview.usage} />
       <Panel title="Active now" note={live.length ? `${live.length} in the last 30 min` : 'nothing in the last 30 min'} wide>
         {live.length === 0 ? (
           <p className="empty">No session has been active in the last 30 minutes.</p>
@@ -133,10 +136,13 @@ export function OverviewView({ overview, onOpen }: { overview: Overview; onOpen:
       <Panel title="Routing check" note={`share of output, last ${overview.windowDays} days`}>
         <Chart option={shareOption} height={250} />
       </Panel>
+      <CostPerDay overview={overview} />
+      <ProjectsPanel projects={overview.projects} />
       <Panel title="When you work" note="tool calls by weekday and hour" wide>
         <Chart option={heatOption} height={260} />
       </Panel>
       <TalkOverview overview={overview} onOpen={onOpen} />
+      <MissedPanel sessions={overview.sessions} onOpen={onOpen} />
       <Panel title="Advisor consultations" note="what Claude wrote just before asking · replies are stored encrypted">
         <div className="scroll">
           <AdvisorFeed calls={overview.advisor} onOpen={onOpen} titles={titles} />

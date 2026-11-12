@@ -9,6 +9,8 @@ export interface ConfirmOptions {
   action: string
   /** A warning line shown in red, such as "This can't be undone". */
   warning?: string
+  /** A change that is easy to undo: the button isn't drawn as a danger. */
+  safe?: boolean
 }
 
 type Pending = ConfirmOptions & { resolve: (ok: boolean) => void }
@@ -69,7 +71,7 @@ export function ConfirmHost() {
           <button ref={cancelRef} className="btn" onClick={() => close(false)}>
             Cancel
           </button>
-          <button className="btn danger solid" onClick={() => close(true)}>
+          <button className={pending.safe ? 'btn primary' : 'btn danger solid'} onClick={() => close(true)}>
             {pending.action}
           </button>
         </div>

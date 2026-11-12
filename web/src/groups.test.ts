@@ -22,6 +22,10 @@ const base: SessionSummary = {
   subagentsTotal: 0,
   contextTokens: 0,
   outputTokens: 0,
+  cost: 0,
+  advisorCost: 0,
+  missed: 0,
+  missedCost: 0,
   lastAction: '',
   talks: 0,
 }

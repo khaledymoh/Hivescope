@@ -7,7 +7,7 @@ import { HiveFlow } from './HiveFlow'
 import { ShotGallery } from './Shots'
 import { TalkPanel } from './Talk'
 import { AdvisorFeed, LiveLog, Panel, Stat } from './parts'
-import { C, ago, duration, hms, modelColor, shortModel, tokens } from './theme'
+import { C, ago, duration, hms, modelColor, shortModel, tokens, usd } from './theme'
 
 type Bar = { lane: number; from: number; to: number; color: string; opacity: number; label: string }
 
@@ -143,7 +143,7 @@ export function SessionView({ s }: { s: SessionDetail }) {
         </p>
         <div className="stats">
           <Stat label="Lead model" value={shortModel(s.mainModel)} color={modelColor(s.mainModel)} />
-          <Stat label="Advisor" value={s.advisorModel ? `${shortModel(s.advisorModel)} · ${s.advisorCalls}×` : 'off'} color={C.opus} />
+          <Stat label={s.advisorCost ? `Advisor · ${usd(s.advisorCost)}` : 'Advisor'} value={s.advisorModel ? `${shortModel(s.advisorModel)} · ${s.advisorCalls}×` : 'off'} color={C.opus} />
           <Stat
             label={`Context now · ${Math.round((100 * s.contextTokens) / contextWindow(s.mainModel))}%`}
             value={tokens(s.contextTokens)}
@@ -154,6 +154,7 @@ export function SessionView({ s }: { s: SessionDetail }) {
           <Stat label="Subagents" value={`${running.length}/${s.subagentsTotal}`} color={running.length ? C.sonnet : undefined} />
           <Stat label="Errors" value={String(s.errors)} color={s.errors ? C.error : undefined} />
           <Stat label="Output tokens" value={tokens(s.outputTokens)} />
+          <Stat label="Cost · API price" value={usd(s.cost)} />
         </div>
       </section>
 
@@ -210,7 +211,7 @@ export function SessionView({ s }: { s: SessionDetail }) {
         </div>
       </Panel>
 
-      <Panel title="Tokens by model" note="this session and its subagents">
+      <Panel title="Tokens by model" note="this session, its subagents and advisor calls · cost at API prices">
         <table className="table">
           <thead>
             <tr>
@@ -219,6 +220,7 @@ export function SessionView({ s }: { s: SessionDetail }) {
               <th className="num">Cache read</th>
               <th className="num">Cache write</th>
               <th className="num">Input</th>
+              <th className="num">Cost</th>
             </tr>
           </thead>
           <tbody>
@@ -229,11 +231,14 @@ export function SessionView({ s }: { s: SessionDetail }) {
                 <td className="num dim">{tokens(b.cacheRead)}</td>
                 <td className="num dim">{tokens(b.cacheWrite)}</td>
                 <td className="num dim">{tokens(b.input)}</td>
+                <td className="num">{usd(b.cost)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </Panel>
+
+      <MissedRuns s={s} />
 
       <Panel title="Session log" note="newest first" wide>
         <div className="scroll tall">
@@ -243,5 +248,50 @@ export function SessionView({ s }: { s: SessionDetail }) {
 
       <ShotGallery key={s.id} sessionId={s.id} live={s.status === 'live'} />
     </div>
+  )
+}
+
+/** Stretches of this session's lead work that the routing rules hand to a cheaper agent. */
+function MissedRuns({ s }: { s: SessionDetail }) {
+  const runs = [...s.missedRuns].reverse()
+  if (runs.length === 0) return null
+  const spent = runs.reduce((n, r) => n + r.cost, 0)
+  const cheap = runs.reduce((n, r) => n + r.cheapCost, 0)
+  return (
+    <Panel title="Possible missed delegations" note={`${runs.length} · the lead spent ${usd(spent)}; the same tokens at the agents' prices: ${usd(cheap)}`} wide>
+      <p className="dim small missed-why">
+        From the last 7 days. A subagent would also not re-read the lead's whole context for each step, so the real saving is usually larger. Hivescope can't see why the lead did this itself: these are hints, not mistakes.
+      </p>
+      <div className="scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>What</th>
+              <th>Lead → suggested</th>
+              <th className="num" title="Responses that made these calls; parallel calls share one">Steps</th>
+              <th className="num">Lead spent</th>
+              <th className="num">At agent price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map(r => (
+              <tr key={`${r.at}-${r.kind}`}>
+                <td className="mono dim">{hms(r.at)}</td>
+                <td className="task" title={r.examples.join('\n')}>
+                  {r.kind === 'builds' ? 'Builds and test runs' : 'Lookups'}: <span className="dim">{r.examples.join(' · ')}</span>
+                </td>
+                <td>
+                  <span style={{ color: modelColor(r.leadModel) }}>{shortModel(r.leadModel)}</span> → <span style={{ color: modelColor(r.suggestModel) }}>{r.suggest}</span>
+                </td>
+                <td className="num" title={`${r.calls} tool calls`}>{r.steps}</td>
+                <td className="num">{usd(r.cost)}</td>
+                <td className="num dim">{usd(r.cheapCost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   )
 }

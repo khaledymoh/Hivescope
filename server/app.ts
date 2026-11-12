@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
+import { cleanSettings, loadSettings, saveSettings, settingsPath } from './settings.ts'
 import { type OpenedCheck, type ShotRoots, type Trash, deleteShots, listOpened, listShots, resolveShot, summarize } from './shots.ts'
 import { type SessionInfo, freeSpace, spaceReport } from './space.ts'
 import { Store } from './store.ts'
@@ -129,7 +130,11 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
     return map
   }
 
-  const wasOpened: OpenedCheck = (sessionId, file) => store.sessions.get(sessionId)?.imagesOpened().has(file) ?? false
+  // Budgets live next to Claude Code's settings, in ~/.claude/hivescope.
+  const settingsFile = settingsPath(path.dirname(opts.root))
+  store.settings = await loadSettings(settingsFile)
+
+  const wasOpened: OpenedCheck =(sessionId, file) => store.sessions.get(sessionId)?.imagesOpened().has(file) ?? false
 
   const server = createServer(async (req, res) => {
     if (!allowedHosts.has(req.headers.host ?? '')) {
@@ -139,6 +144,24 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
 
     if (url.pathname === '/api/overview') return json(res, store.overview())
+
+    // Budgets.
+    if (url.pathname === '/api/settings' && req.method === 'GET') return json(res, store.settings)
+    if (url.pathname === '/api/settings') {
+      // A custom header no other site can send without a CORS preflight this server never grants.
+      if (req.method !== 'POST' || req.headers['x-hivescope'] !== 'change') return json(res, { error: 'refused' }, 403)
+      let body: unknown
+      try {
+        body = JSON.parse(await readBody(req, 10_000))
+      } catch {
+        return json(res, { error: 'bad request' }, 400)
+      }
+      store.settings = cleanSettings(body)
+      await saveSettings(settingsFile, store.settings)
+      store.version++
+      broadcast()
+      return json(res, store.settings)
+    }
 
     // Free space: what agents left behind, and freeing it.
     if (url.pathname === '/api/space' && req.method === 'GET') return json(res, await spaceReport(shotRoots, sessionInfo()))
@@ -220,7 +243,9 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
     const match = url.pathname.match(/^\/api\/session\/([\w-]+)$/)
     if (match) {
       const session = store.sessions.get(match[1]!)
-      return session ? json(res, { ...session.detail(Date.now()), ...store.summaryOf(session), links: store.linksOf(session.id) }) : json(res, { error: 'not found' }, 404)
+      return session
+        ? json(res, { ...session.detail(Date.now()), ...store.summaryOf(session), links: store.linksOf(session.id), missedRuns: store.missedRunsOf(session) })
+        : json(res, { error: 'not found' }, 404)
     }
 
     if (url.pathname === '/api/stream') {
@@ -285,7 +310,7 @@ export async function startHivescope(opts: HivescopeOptions): Promise<Hivescope>
   let lastPush = Date.now()
   const poll = setInterval(async () => {
     const changed = await store.scan()
-    if (changed || Date.now() - lastPush > 30_000) {
+    if (changed ||Date.now() - lastPush > 30_000) {
       broadcast()
       lastPush = Date.now()
     }

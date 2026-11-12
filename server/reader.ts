@@ -5,9 +5,11 @@
  * assumption about it lives in this file. Each record is read defensively:
  * an unknown or malformed record is skipped, never fatal.
  */
+import { AGENT_MODEL, type Usage, costOf, priceOf } from '../shared/pricing.ts'
 import type {
   AdvisorCall,
   LogEvent,
+  MissedDelegation,
   SessionDetail,
   SessionStatus,
   SessionSummary,
@@ -93,7 +95,76 @@ function promptText(content: unknown): string | undefined {
   return t
 }
 
-const emptyBucket = (): TokenBucket => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 })
+const emptyBucket = (): TokenBucket => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0 })
+
+function addTo(bucket: TokenBucket, u: Usage, cost: number) {
+  bucket.input += u.input
+  bucket.cacheRead += u.cacheRead
+  bucket.cacheWrite += u.write5m + u.write1h
+  bucket.output += u.output
+  bucket.cost += cost
+}
+
+/** One model call's tokens from a usage record or one of its passes, with cache writes split by how long they're kept. */
+export function usageOf(rec: Json): Usage {
+  const written = num(rec.cache_creation_input_tokens)
+  const split = isObj(rec.cache_creation) ? rec.cache_creation : undefined
+  const write1h = split ? Math.min(written, num(split.ephemeral_1h_input_tokens)) : 0
+  return { input: num(rec.input_tokens), output: num(rec.output_tokens), cacheRead: num(rec.cache_read_input_tokens), write5m: written - write1h, write1h }
+}
+
+const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, write5m: 0, write1h: 0 })
+const plus = (a: Usage, b: Usage): Usage => ({
+  input: a.input + b.input,
+  output: a.output + b.output,
+  cacheRead: a.cacheRead + b.cacheRead,
+  write5m: a.write5m + b.write5m,
+  write1h: a.write1h + b.write1h,
+})
+
+/** Reads and searches: the lookups the routing rules hand to `quick` or `worker`. */
+const LOOKUP = /^(Read|Grep|Glob|LS|WebSearch|WebFetch|NotebookRead)$/
+const WEB = /^Web(Search|Fetch)$/
+const EDIT = /^(Edit|MultiEdit|Write|NotebookEdit)$/
+/** Builds and test runs, which the routing rules hand to `worker`. */
+const BUILD =
+  /\b(npm (run )?(test|build)|npx (vitest|jest|tsc)|pnpm (run )?(test|build)|yarn (test|build)|gradlew(\.bat)?|mvn|pytest|cargo (build|test)|go (build|test)|dotnet (build|test)|vitest|jest)\b/
+/** Lookups in this many responses in a row, with nothing edited, is a stretch worth handing off. */
+export const MISSED_LOOKUPS = 5
+/** The lead looking at a screenshot is checking its own work, not looking something up. */
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i
+/** Builds and test runs in one turn before they count as a stretch. */
+export const MISSED_BUILDS = 2
+/** A tool error the person caused, such as declining a permission prompt: not a repeated failure. */
+const DECLINED = /doesn't want to proceed|was rejected|user (denied|declined|rejected)/i
+
+interface LeadCall {
+  tool: string
+  file?: string
+  text: string
+  msgId: string
+  at: number
+}
+interface LeadRun {
+  calls: LeadCall[]
+  model: string
+  closed: boolean
+}
+/** What the lead did between two of your prompts. */
+interface LeadTurn {
+  runs: LeadRun[]
+  builds: LeadCall[]
+  buildModel: string
+  edited: Set<string>
+}
+const pathKey = (file: string) => file.replace(/\\/g, '/').toLowerCase()
+
+function resultText(block: Json): string {
+  const c = block.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) return c.map(b => (isObj(b) ? (str(b.text) ?? '') : '')).join(' ')
+  return ''
+}
 
 /** How much of a message between sessions is kept. */
 const LINK_TEXT = 4000
@@ -219,8 +290,22 @@ export class Transcript {
   lastAction = ''
   toolMix: Record<string, number> = {}
   tokensByModel: Record<string, TokenBucket> = {}
-  /** Per day and model: output and total tokens. */
-  daily = new Map<string, { output: number; total: number }>()
+  /** The advisor's own calls; also counted in tokensByModel under the advisor's model. */
+  advisorTokens: TokenBucket = emptyBucket()
+  /** Per day and model: output and total tokens, and their cost. */
+  daily = new Map<string, { output: number; total: number; cost: number }>()
+  /** Every model call: [time, cost, output tokens, model], for 5-hour windows. */
+  spend: [number, number, number, string][] = []
+  /** Times the context shrank to under half, as compacting does. */
+  contextDrops = 0
+  /** Tool errors by tool and message, for "the same error twice". */
+  errorRepeats = new Map<string, { tool: string; text: string; count: number; firstAt: number; lastAt: number }>()
+  /** tool_use id -> tool name, until its result arrives. */
+  private toolNames = new Map<string, string>()
+  /** The lead's responses: what each cost and its tokens, by message id. */
+  private responses = new Map<string, { cost: number; usage: Usage }>()
+  private turns: LeadTurn[] = []
+  private missedCache?: { key: string; runs: MissedDelegation[] }
   /** `day|weekday:hour` -> tool calls; the day lets the overview keep only its window. */
   hours = new Map<string, number>()
   /** Minute start -> tool calls. */
@@ -306,9 +391,24 @@ export class Transcript {
     const content = message.content
     if (Array.isArray(content)) {
       for (const block of content) {
-        if (isObj(block) && block.type === 'tool_result' && block.is_error === true) {
-          this.errors++
-          this.push({ at, kind: 'error', text: 'tool error', model: this.model })
+        if (isObj(block) && block.type === 'tool_result') {
+          const id = str(block.tool_use_id) ?? ''
+          const tool = this.toolNames.get(id) ?? 'tool'
+          this.toolNames.delete(id)
+          if (block.is_error === true) {
+            this.errors++
+            const said = resultText(block).replace(/<\/?tool_use_error>/g, '').replace(/\s+/g, ' ').trim()
+            this.push({ at, kind: 'error', text: said ? `${tool} error: ${clip(said, 120)}` : `${tool} error`, model: this.model })
+            if (said && !DECLINED.test(said)) {
+              const key = `${tool}|${said.replace(/\d+/g, '#').slice(0, 160)}`
+              const seen = this.errorRepeats.get(key)
+              // A repeat is the same error again soon after; much later, it starts a new episode.
+              if (seen && at - seen.lastAt <= RECENT_MS) {
+                seen.count++
+                seen.lastAt = at
+              } else this.errorRepeats.set(key, { tool, text: clip(said, 200), count: 1, firstAt: at, lastAt: at })
+            }
+          }
         }
         if (isObj(block) && block.type === 'tool_result' && this.pendingAsk?.toolUseId === block.tool_use_id) this.pendingAsk = undefined
         if (isObj(block) && block.type === 'tool_result') {
@@ -349,6 +449,7 @@ export class Transcript {
       this.lastAsk = undefined
       this.pendingAsk = undefined
       this.prompts++
+      if (!this.agentId) this.turns.push({ runs: [], builds: [], buildModel: this.model ?? '', edited: new Set() })
       if (at) this.promptMarks.push([at, `prompt: ${clip(text, 140)}`])
       // A subagent's prompt is its brief from the lead: keep more of it.
       this.push({ at, kind: 'prompt', text: `prompt: ${clip(text, this.agentId ? 400 : 140)}`, model: this.model })
@@ -368,28 +469,40 @@ export class Transcript {
       this.seenMessages.add(id)
       const usage = isObj(message.usage) ? message.usage : undefined
       if (usage && model && model !== '<synthetic>') {
-        const bucket = (this.tokensByModel[model] ??= emptyBucket())
-        const input = num(usage.input_tokens)
-        const cacheRead = num(usage.cache_read_input_tokens)
-        const cacheWrite = num(usage.cache_creation_input_tokens)
-        const output = num(usage.output_tokens)
-        bucket.input += input
-        bucket.cacheRead += cacheRead
-        bucket.cacheWrite += cacheWrite
-        bucket.output += output
-        // A response that consulted the advisor reports its passes summed; the context is one pass, the last.
+        const speed = str(usage.speed)
+        // A response that consulted the advisor lists its passes: its own, which the usage sums,
+        // and the advisor's, which the usage leaves out and which run on the advisor's model.
         const passes = Array.isArray(usage.iterations) ? usage.iterations.filter(isObj) : []
-        const lastPass = passes[passes.length - 1]
-        this.contextTokens = lastPass
-          ? num(lastPass.input_tokens) + num(lastPass.cache_read_input_tokens) + num(lastPass.cache_creation_input_tokens)
-          : input + cacheRead + cacheWrite
-        if (at) {
-          const key = `${dayOf(at)}|${model}`
-          const day = this.daily.get(key) ?? { output: 0, total: 0 }
-          day.output += output
-          day.total += input + cacheRead + cacheWrite + output
-          this.daily.set(key, day)
+        const own = passes.filter(p => (str(p.type) ?? 'message') === 'message')
+        const ownPasses = own.length ? own : [usage]
+        const calls = ownPasses.map(p => ({ model, u: usageOf(p), advisor: false }))
+        for (const p of passes) if (p.type === 'advisor_message') calls.push({ model: str(p.model) ?? this.advisorModel ?? model, u: usageOf(p), advisor: true })
+        let leadCost = 0
+        let leadUsage = zeroUsage()
+        for (const c of calls) {
+          const cost = costOf(c.model, c.u, speed)
+          addTo((this.tokensByModel[c.model] ??= emptyBucket()), c.u, cost)
+          if (c.advisor) addTo(this.advisorTokens, c.u, cost)
+          else {
+            leadCost += cost
+            leadUsage = plus(leadUsage, c.u)
+          }
+          if (at) {
+            const key = `${dayOf(at)}|${c.model}`
+            const day = this.daily.get(key) ?? { output: 0, total: 0, cost: 0 }
+            day.output += c.u.output
+            day.total += c.u.input + c.u.cacheRead + c.u.write5m + c.u.write1h + c.u.output
+            day.cost += cost
+            this.daily.set(key, day)
+            this.spend.push([at, cost, c.u.output, c.model])
+          }
         }
+        if (id) this.responses.set(id, { cost: leadCost, usage: leadUsage })
+        // The context is what one pass read: its own last one.
+        const last = ownPasses[ownPasses.length - 1]!
+        const context = num(last.input_tokens) + num(last.cache_read_input_tokens) + num(last.cache_creation_input_tokens)
+        if (this.contextTokens > 0 && context < this.contextTokens / 2) this.contextDrops++
+        this.contextTokens = context
       }
     }
 
@@ -402,6 +515,8 @@ export class Transcript {
         if (text) this.lastSaid = { at, text: clip(text, 600) }
       } else if (block.type === 'tool_use') {
         const name = str(block.name) ?? 'tool'
+        if (str(block.id)) this.toolNames.set(str(block.id)!, name)
+        if (!this.agentId) this.trackLead(name, block.input, id, at)
         this.toolCalls++
         this.toolMix[name] = (this.toolMix[name] ?? 0) + 1
         const text = clip(describeCall(name, block.input), 140)
@@ -455,6 +570,105 @@ export class Transcript {
 
   get outputTokens(): number {
     return Object.values(this.tokensByModel).reduce((sum, b) => sum + b.output, 0)
+  }
+
+  get cost(): number {
+    return Object.values(this.tokensByModel).reduce((sum, b) => sum + b.cost, 0)
+  }
+
+  /** What the lead read and searched, edited and built, turn by turn, for missed delegations. */
+  private trackLead(tool: string, input: unknown, msgId: string, at: number) {
+    if (isTaskTool(tool)) return
+    let turn = this.turns[this.turns.length - 1]
+    if (!turn) this.turns.push((turn = { runs: [], builds: [], buildModel: this.model ?? '', edited: new Set() }))
+    const args = isObj(input) ? input : {}
+    const file = str(args.file_path) ?? str(args.notebook_path)
+    const call: LeadCall = { tool, file: file && pathKey(file), text: clip(describeCall(tool, input), 100), msgId, at }
+    // A run is a stretch of lookups in a row; any other tool ends it.
+    const run = turn.runs[turn.runs.length - 1]
+    const open = run && !run.closed ? run : undefined
+    if (LOOKUP.test(tool) && !(tool === 'Read' && IMAGE.test(call.file ?? ''))) {
+      if (open) open.calls.push(call)
+      else turn.runs.push({ calls: [call], model: this.model ?? '', closed: false })
+      return
+    }
+    if (open) open.closed = true
+    if (EDIT.test(tool) && call.file) turn.edited.add(call.file)
+    if ((tool === 'Bash' || tool === 'PowerShell') && BUILD.test(str(args.command) ?? '')) {
+      turn.builds.push(call)
+      turn.buildModel = this.model ?? turn.buildModel
+    }
+  }
+
+  /** What the responses that made these calls cost, and the same tokens at another model's prices. */
+  private costOfCalls(calls: LeadCall[], cheapModel: string): { cost: number; cheapCost: number } {
+    let cost = 0
+    let cheapCost = 0
+    for (const id of new Set(calls.map(c => c.msgId))) {
+      const r = this.responses.get(id)
+      if (!r) continue
+      cost += r.cost
+      cheapCost += costOf(cheapModel, r.usage)
+    }
+    return { cost, cheapCost }
+  }
+
+  /**
+   * Stretches of the lead's work the routing rules hand to a cheaper agent: lookups in five or more
+   * responses in a row (parallel calls in one response are one step), or two or more builds and
+   * test runs in one turn. Reading a file the same turn then
+   * edits is the lead's own work (an edit needs a read first), so those reads don't count.
+   * Only when the suggested agent runs on a cheaper model than the lead.
+   */
+  missedRuns(): MissedDelegation[] {
+    const key = `${this.lastAt}|${this.toolCalls}|${this.responses.size}`
+    if (this.missedCache?.key === key) return this.missedCache.runs
+    const out: MissedDelegation[] = []
+    const pricier = (lead: string, cheap: string) => (priceOf(lead)?.price.output ?? 0) > (priceOf(cheap)?.price.output ?? 0)
+    for (const turn of this.turns) {
+      for (const run of turn.runs) {
+        const calls = run.calls.filter(c => !(c.tool === 'Read' && c.file && turn.edited.has(c.file)))
+        const steps = new Set(calls.map(c => c.msgId)).size
+        if (steps < MISSED_LOOKUPS) continue
+        const suggest = steps >= 10 || calls.filter(c => WEB.test(c.tool)).length >= 2 ? 'worker' : 'quick'
+        const suggestModel = AGENT_MODEL[suggest]
+        if (!pricier(run.model, suggestModel)) continue
+        // Responses that also read files the turn edits: count only this stretch's share.
+        const share = calls.length / run.calls.length
+        const { cost, cheapCost } = this.costOfCalls(run.calls, suggestModel)
+        out.push({
+          at: calls[0]!.at,
+          endAt: calls[calls.length - 1]!.at,
+          kind: 'lookups',
+          calls: calls.length,
+          steps,
+          examples: calls.slice(0, 4).map(c => c.text),
+          suggest,
+          suggestModel,
+          leadModel: run.model,
+          cost: cost * share,
+          cheapCost: cheapCost * share,
+        })
+      }
+      if (turn.builds.length >= MISSED_BUILDS && pricier(turn.buildModel, AGENT_MODEL.worker)) {
+        const { cost, cheapCost } = this.costOfCalls(turn.builds, AGENT_MODEL.worker)
+        out.push({
+          at: turn.builds[0]!.at,
+          endAt: turn.builds[turn.builds.length - 1]!.at,
+          kind: 'builds',
+          calls: turn.builds.length,
+          steps: new Set(turn.builds.map(c => c.msgId)).size,
+          examples: turn.builds.slice(0, 4).map(c => c.text),
+          suggest: 'worker',
+          suggestModel: AGENT_MODEL.worker,
+          leadModel: turn.buildModel,
+          cost,
+          cheapCost,
+        })
+      }
+    }
+    this.missedCache = { key, runs: out }
+    return out
   }
 }
 
@@ -575,6 +789,11 @@ export class Session {
       .sort((a, b) => a.startedAt - b.startedAt)
   }
 
+  /** The main transcript and every subagent's. */
+  transcripts(): Transcript[] {
+    return [this.main, ...[...this.agents.values()].map(a => a.transcript)]
+  }
+
   lastAt(): number {
     let last = this.main.lastAt
     for (const { transcript } of this.agents.values()) last = Math.max(last, transcript.lastAt)
@@ -606,6 +825,10 @@ export class Session {
       subagentsTotal: runs.length,
       contextTokens: m.contextTokens,
       outputTokens: m.outputTokens + [...this.agents.values()].reduce((n, a) => n + a.transcript.outputTokens, 0),
+      cost: this.transcripts().reduce((n, t) => n + t.cost, 0),
+      advisorCost: this.transcripts().reduce((n, t) => n + t.advisorTokens.cost, 0),
+      missed: m.missedRuns().length,
+      missedCost: m.missedRuns().reduce((n, r) => n + r.cost, 0),
       lastAction: m.lastAction,
       talks: m.links.filter(l => l.kind === 'sent' || l.kind === 'received').length,
       waiting: m.pendingAsk ? { kind: m.pendingAsk.kind, text: m.pendingAsk.text, options: m.pendingAsk.options, blocked: true, at: m.pendingAsk.at } : m.lastAsk,
@@ -649,6 +872,7 @@ export class Session {
         into.cacheRead += b.cacheRead
         into.cacheWrite += b.cacheWrite
         into.output += b.output
+        into.cost += b.cost
       }
     }
     for (const { transcript } of this.agents.values()) {
@@ -666,6 +890,7 @@ export class Session {
       lastSaid: this.main.lastSaid,
       links: this.main.links,
       log: this.log(),
+      missedRuns: this.main.missedRuns(),
     }
   }
 }

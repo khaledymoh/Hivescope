@@ -5,13 +5,23 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-import type { AdvisorCall, LogEvent, Overview, SessionLink, SessionSummary } from '../shared/types.ts'
+import { type AdvisorCall, type Alert, COMPACT_AT, type LogEvent, type Overview, type SessionLink, type SessionSummary, type Settings, type Usage, contextWindow } from '../shared/types.ts'
 import { type RegistryEntry, type ResolvedLinks, readRegistry, resolveLinks } from './links.ts'
-import { Session, type SubagentMeta, type Transcript, dayOf } from './reader.ts'
+import { Session, type SubagentMeta, type Transcript, clip, dayOf } from './reader.ts'
+import { type SpendEvent, hash, spendAlerts, usageOf } from './usage.ts'
+
+/** Alerts only for sessions active this recently: older ones are history, not news. */
+const ALERT_RECENT_MS = 30 * 60_000
+/** A context this full gets an alert. */
+export const CONTEXT_ALERT = 0.8
+/** A running subagent quiet this long gets an alert. */
+export const STALL_MS = 10 * 60_000
 
 const NEWLINE = 0x0a
 /** A single read never takes more than this; the rest is read on the next pass. */
 const MAX_CHUNK = 64 * 1024 * 1024
+
+const projectOf = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).pop() ?? (cwd || 'unknown')
 
 interface Tracked {
   file: string
@@ -32,6 +42,10 @@ export class Store {
 
   /** Running sessions, as Claude Code registers them next to the projects folder. */
   registry: RegistryEntry[] = []
+  /** Your budgets; the server loads and saves them. */
+  settings: Settings = { budgets: {} }
+  /** When each budget alert first showed, for its time. */
+  private alertSeen = new Map<string, number>()
   private resolved?: { version: number; registry: RegistryEntry[]; links: ResolvedLinks }
 
   constructor(
@@ -119,7 +133,7 @@ export class Store {
    * while the session runs: a closed app or terminal can't be waiting on you.
    */
   summaryOf(session: Session, now = Date.now()): SessionSummary {
-    const s = session.summary(now)
+    const s = { ...session.summary(now), ...this.missedOf(session) }
     const reg = this.registry.find(r => r.sessionId === session.id)
     if (!reg) return { ...s, waiting: undefined }
     const runState = reg.status === 'busy' || reg.status === 'waiting' ? reg.status : 'idle'
@@ -131,6 +145,16 @@ export class Store {
     // Working again: the question its last turn ended with is behind it.
     if (runState === 'busy' && waiting?.kind === 'asked') waiting = undefined
     return { ...s, runState, waiting }
+  }
+
+  /** Possible missed delegations inside the window, like the charts. */
+  missedRunsOf(session: Session) {
+    return session.main.missedRuns().filter(r => r.at >= this.cutoff)
+  }
+
+  private missedOf(session: Session): Pick<SessionSummary, 'missed' | 'missedCost'> {
+    const runs = this.missedRunsOf(session)
+    return { missed: runs.length, missedCost: runs.reduce((n, r) => n + r.cost, 0) }
   }
 
   /** Read a file that the watcher says changed. */
@@ -262,17 +286,21 @@ export class Store {
     const live = [...this.sessions.values()].filter(s => (s.main.startedAt > 0 || s.agents.size > 0) && s.lastAt() >= this.cutoff)
     const sessions = live.map(s => this.summaryOf(s, now)).sort((a, b) => b.lastAt - a.lastAt)
 
-    const daily = new Map<string, { output: number; total: number }>()
+    const daily = new Map<string, { output: number; total: number; cost: number }>()
     const heat = new Map<string, number>()
     const log: LogEvent[] = []
     const advisor: AdvisorCall[] = []
+    const projects = new Map<string, { name: string; cost: number; sessions: number }>()
     for (const s of live) {
-      for (const t of [s.main, ...[...s.agents.values()].map(a => a.transcript)]) {
+      let windowCost = 0
+      for (const t of s.transcripts()) {
         for (const [key, v] of t.daily) {
           if (key < firstDay) continue
-          const into = daily.get(key) ?? { output: 0, total: 0 }
+          const into = daily.get(key) ?? { output: 0, total: 0, cost: 0 }
           into.output += v.output
           into.total += v.total
+          into.cost += v.cost
+          windowCost += v.cost
           daily.set(key, into)
         }
         for (const [key, n] of t.hours) {
@@ -283,7 +311,13 @@ export class Store {
       }
       log.push(...s.log().slice(-80))
       advisor.push(...s.advisorCalls().filter(a => a.at >= this.cutoff))
+      const name = projectOf(s.main.cwd)
+      const p = projects.get(name) ?? { name, cost: 0, sessions: 0 }
+      p.cost += windowCost
+      p.sessions++
+      projects.set(name, p)
     }
+    const usage = this.usage(now)
     return {
       generatedAt: now,
       windowDays: this.windowDays,
@@ -303,7 +337,73 @@ export class Store {
       advisorCount: advisor.length,
       ...this.talk(),
       scan: this.scanStats,
+      projects: [...projects.values()].filter(p => p.cost > 0).sort((a, b) => b.cost - a.cost),
+      usage,
+      alerts: this.alerts(now, usage),
     }
+  }
+
+  /** Spend in the current 5-hour window, today and this week, from every transcript read. */
+  usage(now = Date.now()): Usage {
+    const events: SpendEvent[] = []
+    for (const s of this.sessions.values()) for (const t of s.transcripts()) events.push(...t.spend)
+    return usageOf(events, now, this.settings.budgets)
+  }
+
+  /**
+   * What deserves a notification now: a context nearly full, the same tool error twice, a
+   * subagent gone quiet, a budget nearly reached. Ids are stable, so the
+   * desktop app notifies each once.
+   */
+  alerts(now = Date.now(), usage = this.usage(now)): Alert[] {
+    const out: Alert[] = []
+    for (const s of this.sessions.values()) {
+      if (now - s.lastAt() > ALERT_RECENT_MS) continue
+      const sum = this.summaryOf(s, now)
+      const window = contextWindow(sum.mainModel)
+      const share = sum.contextTokens / window
+      if (share >= CONTEXT_ALERT) {
+        out.push({
+          id: `context:${s.id}:${s.main.contextDrops}`,
+          kind: 'context',
+          sessionId: s.id,
+          title: `${sum.title}: context ${Math.round(100 * share)}% full`,
+          text: `${Math.round(sum.contextTokens / 1000)}k of ${Math.round(window / 1000)}k tokens. Compact it or start a new session (Hivescope suggests compacting from ${Math.round(100 * COMPACT_AT)}%).`,
+          at: s.main.lastAt,
+        })
+      }
+      for (const t of s.transcripts()) {
+        for (const [key, e] of t.errorRepeats) {
+          if (e.count < 2 || now - e.lastAt > ALERT_RECENT_MS) continue
+          const who = t.agentId ? `${t.who} subagent` : 'main session'
+          out.push({
+            id: `error:${s.id}:${t.agentId ?? 'main'}:${hash(key)}:${e.firstAt}`,
+            kind: 'error',
+            sessionId: s.id,
+            title: `${sum.title}: same ${e.tool} error ${e.count}×`,
+            text: `In the ${who}: ${clip(e.text, 160)}`,
+            at: e.lastAt,
+          })
+        }
+      }
+      for (const run of s.subagents(now)) {
+        const t = s.agents.get(run.id)?.transcript
+        if (run.status !== 'running' || !t || now - t.lastAt < STALL_MS) continue
+        out.push({
+          id: `stalled:${s.id}:${run.id}:${t.lastAt}`,
+          kind: 'stalled',
+          sessionId: s.id,
+          title: `${run.type} has been quiet for ${Math.round((now - t.lastAt) / 60_000)} min`,
+          text: `${run.description || 'Subagent'} in ${sum.title}. It may be waiting on a long command, or stuck.`,
+          at: t.lastAt,
+        })
+      }
+    }
+    for (const a of spendAlerts(usage, now)) {
+      if (!this.alertSeen.has(a.id)) this.alertSeen.set(a.id, now)
+      out.push({ ...a, at: this.alertSeen.get(a.id)! })
+    }
+    return out.sort((a, b) => b.at - a.at)
   }
 
   /** Who messaged whom in the window, and the newest messages. */

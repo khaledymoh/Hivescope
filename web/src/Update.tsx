@@ -30,7 +30,7 @@ export function NotificationsButton() {
       }}
       aria-pressed={on}
       aria-label={on ? 'Notifications on' : 'Notifications off'}
-      title={on ? 'Notifications on: subagents finishing, sessions waiting for you, updates. Click to turn them off.' : 'Notifications off. Click to turn them on.'}
+      title={on ? 'Notifications on: sessions waiting for you, subagents finishing, alerts and updates. Click to turn them off.' : 'Notifications off. Click to turn them on.'}
     >
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
@@ -42,8 +42,8 @@ export function NotificationsButton() {
 }
 
 /**
- * The top bar's update button, in the desktop app only. It checks on its own, downloads a newer
- * version and offers "Install <version>": only then does it download, install without a wizard and restart.
+ * The top bar's update button, in the desktop app only. It checks on its own and offers
+ * "Install <version>" when there's a newer one: only then does it download, install without a wizard and restart.
  */
 export function UpdateButton() {
   const bridge = window.hivescopeDesktop?.update

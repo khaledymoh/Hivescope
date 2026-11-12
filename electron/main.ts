@@ -196,7 +196,7 @@ function buildTrayMenu() {
       ...(updater.enabled ? [updateItem, { type: 'separator' as const }] : []),
       {
         label: 'Notifications',
-        sublabel: 'Subagents finishing, sessions waiting for you, updates',
+        sublabel: 'Sessions waiting, subagents finishing, alerts, updates',
         type: 'checkbox',
         checked: prefs.notifications,
         click: item => setNotifications(item.checked),
@@ -238,6 +238,8 @@ function watchActivity(h: Hivescope) {
   const known = new Map<string, 'running' | 'done'>()
   /** Session id -> what it waited on last time, to notify once per new question. */
   const waits = new Map<string, string>()
+  /** Alerts already notified (or already there when Hivescope started). */
+  const alerted = new Set<string>()
   let seeded = false
   const check = () => {
     const now = Date.now()
@@ -265,12 +267,21 @@ function watchActivity(h: Hivescope) {
         known.set(run.id, run.status)
       }
     }
+    // Context nearly full, the same error twice, a quiet subagent, budgets.
+    const alerts = h.store.alerts(now).filter(a => !alerted.has(a.id))
+    for (const a of alerts) alerted.add(a.id)
+    const fresh = seeded ? alerts : []
     seeded = true
     tray?.setToolTip(
       `Hivescope · ${waiting ? `${waiting} waiting for you · ` : ''}${live} live session${live === 1 ? '' : 's'} · ${running} subagent${running === 1 ? '' : 's'} running`,
     )
 
     if (!prefs.notifications || !Notification.isSupported()) return
+    for (const a of fresh.slice(0, 3)) {
+      const note = new Notification({ title: a.title, body: a.text.slice(0, 240), icon: ICON })
+      note.on('click', () => show(a.sessionId))
+      note.show()
+    }
     for (const a of asks) {
       const note = new Notification({ title: `${a.title} is waiting for you`, body: a.text.slice(0, 240), icon: ICON })
       note.on('click', () => show(a.sessionId))

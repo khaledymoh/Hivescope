@@ -7,7 +7,7 @@ import { SessionView } from './SessionView'
 import { SpaceView } from './Space'
 import { NotificationsButton, UpdateButton } from './Update'
 import { GROUP_LABELS, type GroupBy, groupSessions, remember, remembered } from './groups'
-import { C, ago, dayOf, family, modelColor, shortModel, tokens } from './theme'
+import { C, ago, dayOf, family, modelColor, shortModel, tokens, usd } from './theme'
 
 export function App() {
   const { version, connected } = useVersion()
@@ -138,6 +138,7 @@ function Kpis({ overview }: { overview: Overview }) {
     ['Subagents running', String(running), running ? C.sonnet : C.dim],
     [`Advisor calls · ${overview.windowDays}d`, String(advisor), C.opus],
     ['Output today', tokens(outToday), C.text],
+    ['Cost today · API price', usd(overview.usage.today.cost), C.text],
   ]
   return (
     <div className="kpis">
@@ -199,8 +200,16 @@ function SessionCard({ s, active, onClick }: { s: SessionSummary; active: boolea
             ✕ {s.errors}
           </span>
         )}
+        {s.missed > 0 && (
+          <span title={`${s.missed} possible missed delegation${s.missed === 1 ? '' : 's'}: the lead spent ${usd(s.missedCost)} on work a cheaper agent could do`} style={{ color: C.honey }}>
+            ⇣ {s.missed}
+          </span>
+        )}
         <span className="grow" />
         <span title="Output tokens">{tokens(s.outputTokens)}</span>
+        <span title="API-equivalent cost of this session, its subagents and advisor calls" className="card-cost">
+          {usd(s.cost)}
+        </span>
       </div>
       {s.status === 'live' && s.lastAction && <div className="card-last">{s.lastAction}</div>}
       <div className="card-bar" style={{ background: C[family(s.mainModel)] }} />
