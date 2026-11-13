@@ -164,7 +164,7 @@ export function SessionView({ s }: { s: SessionDetail }) {
 
       <TalkPanel links={s.links} />
 
-      <Panel title="Timeline" note="main activity per minute · subagent runs · ▲ prompts · ◆ advisor · drag the slider ends to zoom" wide>
+      <Panel title="Timeline" note="main activity per minute · subagent runs · ▲ prompts · ◆ advisor · Ctrl + scroll or the slider to zoom" wide>
         <Chart key={s.id} option={timeline} initial={initialZoom} height={Math.min(520, 120 + 34 * (s.subagents.length + 1))} />
       </Panel>
 

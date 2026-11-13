@@ -2325,3 +2325,81 @@ h2 {
     display: none;
   }
 }
+
+/* Charts: zoom buttons and full screen. */
+.chart-wrap {
+  position: relative;
+}
+.chart-tools {
+  position: absolute;
+  /* In the panel's heading row, clear of the chart's own legend. */
+  top: -32px;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.chart-wrap:hover .chart-tools,
+.chart-tools:focus-within,
+.chart-wrap.full .chart-tools {
+  opacity: 1;
+}
+.chart-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel2);
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chart-tools button:hover {
+  color: var(--honey);
+  border-color: color-mix(in srgb, var(--honey) 50%, var(--line));
+}
+.chart-wrap.full {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  padding: 18px 22px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+.chart-wrap.full .chart-tools {
+  top: 14px;
+  right: 18px;
+}
+.chart-wrap.full .chart-box {
+  flex: 1;
+  min-height: 0;
+}
+/* Keep the panel's note clear of the chart buttons in its heading row. */
+.panel:has(> .chart-wrap .chart-tools) > .panel-h {
+  padding-right: 40px;
+}
+.panel:has(> .chart-wrap .chart-tools button:nth-child(2)) > .panel-h {
+  padding-right: 128px;
+}
+.usage-chart:hover .usage-sub {
+  visibility: hidden;
+}
+.chart-title {
+  margin: 0 0 10px;
+  padding-right: 140px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}

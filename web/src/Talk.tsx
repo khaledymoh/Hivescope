@@ -178,7 +178,8 @@ export function TalkOverview({ overview, onOpen }: { overview: Overview; onOpen:
           type: 'graph' as const,
           layout: 'circular' as const,
           circular: { rotateLabel: false },
-          roam: false,
+          // Drag to move; zooming is the chart's buttons and Ctrl + scroll, so the page still scrolls.
+          roam: 'move' as const,
           top: 30,
           bottom: 30,
           left: 140,
