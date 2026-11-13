@@ -1,7 +1,7 @@
 {
   "name": "hivescope",
   "productName": "Hivescope",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "A local dashboard that watches every Claude Code session on this PC: sessions, subagents, advisor calls, models and tools.",
   "author": "Hivescope",
   "private": true,
